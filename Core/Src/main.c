@@ -100,6 +100,7 @@ int main(void)
   MX_I2C1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  ADC2_StartDMA();//DMA的ADC初始化
 
   /* USER CODE END 2 */
 
@@ -110,6 +111,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    ADC2_UpdateBatteryVoltages();
   }
   /* USER CODE END 3 */
 }

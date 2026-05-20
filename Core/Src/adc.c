@@ -22,6 +22,44 @@
 
 /* USER CODE BEGIN 0 */
 
+/* ADC2 DMA 缓冲区: 通道序号 3(PA6),4(PA7),11,12 */
+uint16_t adc2_buffer[4];
+
+/* 全局电池电压变量 */
+float battery1_voltage = 0.0f;
+float battery2_voltage = 0.0f;
+
+void ADC2_StartDMA(void)
+{
+    HAL_ADC_Start_DMA(&hadc2, (uint32_t *)adc2_buffer, 4);
+}
+
+void ADC2_UpdateBatteryVoltages(void)
+{
+    battery1_voltage = (float)adc2_buffer[0] * 3.3f / 4095.0f * 53.0f / 2.0f + 1.0f;
+    battery2_voltage = (float)adc2_buffer[1] * 3.3f / 4095.0f * 53.0f / 2.0f + 1.0f;
+}
+
+uint16_t ADC2_GetBattery1ADC(void)
+{
+    return adc2_buffer[0];
+}
+
+uint16_t ADC2_GetBattery2ADC(void)
+{
+    return adc2_buffer[1];
+}
+
+float ADC2_GetBattery1Voltage(void)
+{
+    return battery1_voltage;
+}
+
+float ADC2_GetBattery2Voltage(void)
+{
+    return battery2_voltage;
+}
+
 /* USER CODE END 0 */
 
 ADC_HandleTypeDef hadc1;

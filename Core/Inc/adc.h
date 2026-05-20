@@ -45,6 +45,18 @@ void MX_ADC2_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 
+/* ADC2 DMA 电池电压读取 */
+void ADC2_StartDMA(void);
+void ADC2_UpdateBatteryVoltages(void);
+uint16_t ADC2_GetBattery1ADC(void);
+uint16_t ADC2_GetBattery2ADC(void);
+float ADC2_GetBattery1Voltage(void);
+float ADC2_GetBattery2Voltage(void);
+
+/* 全局电池电压变量 */
+extern float battery1_voltage;
+extern float battery2_voltage;
+
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus
