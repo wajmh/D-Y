@@ -100,7 +100,13 @@ int main(void)
   MX_I2C1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  ADC2_StartDMA();//DMA的ADC初始化
+  ADC1_StartDMA();//DMA ADC init
+  ADC2_StartDMA();
+  HAL_Delay(20);
+  ADC_UpdateCurrents();
+  ADC2_UpdateBatteryVoltages();
+  Power_UpdateGpioDebugStates();//mos管的检测
+  Power_EnterDischargeMode();//初始化双电池状态
 
   /* USER CODE END 2 */
 
@@ -111,7 +117,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    ADC_UpdateCurrents();
     ADC2_UpdateBatteryVoltages();
+    Power_UpdateGpioDebugStates();
+    Power_DischargeModeTask();
+    HAL_Delay(10);
   }
   /* USER CODE END 3 */
 }

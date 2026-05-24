@@ -23,21 +23,79 @@
 /* USER CODE BEGIN 0 */
 
 /* ADC2 DMA 缓冲区: 通道序号 3(PA6),4(PA7),11,12 */
-uint16_t adc2_buffer[4];
+uint16_t adc1_buffer[6]; /* PC0, PC1, PC2, PC3, PA2, PB12 */
+uint16_t adc2_buffer[4]; /* PA6, PA7, PC5, PB2 */
 
 /* 全局电池电压变量 */
 float battery1_voltage = 0.0f;
 float battery2_voltage = 0.0f;
+float leg_current[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+float battery1_current = 0.0f;
+float battery2_current = 0.0f;
+float peripheral_discharge_current = 0.0f;
+
+static float ADC_RawToVoltage(uint16_t raw)
+{
+    return (float)raw * ADC_REFERENCE_VOLTAGE / ADC_MAX_RAW_VALUE;
+}
+
+static float ADC_CurrentFromRaw(uint16_t raw, float zeroVoltage, float ampsPerVolt)
+{
+    return (ADC_RawToVoltage(raw) - zeroVoltage) * ampsPerVolt;
+}
+
+void ADC1_StartDMA(void)
+{
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc1_buffer, 6);
+}
 
 void ADC2_StartDMA(void)
 {
     HAL_ADC_Start_DMA(&hadc2, (uint32_t *)adc2_buffer, 4);
 }
 
+void ADC_UpdateCurrents(void)
+{
+    leg_current[0] = ADC_CurrentFromRaw(adc1_buffer[0], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
+    leg_current[1] = ADC_CurrentFromRaw(adc1_buffer[1], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
+    leg_current[2] = ADC_CurrentFromRaw(adc1_buffer[2], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
+    leg_current[3] = ADC_CurrentFromRaw(adc1_buffer[3], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
+    battery1_current = ADC_CurrentFromRaw(adc1_buffer[4], CURRENT_ZERO_VOLTAGE, BATTERY_CURRENT_AMPS_PER_VOLT);
+    battery2_current = ADC_CurrentFromRaw(adc1_buffer[5], CURRENT_ZERO_VOLTAGE, BATTERY_CURRENT_AMPS_PER_VOLT);
+    peripheral_discharge_current = ADC_CurrentFromRaw(adc2_buffer[3],
+                                                      CURRENT_ZERO_VOLTAGE,
+                                                      PERIPHERAL_DISCHARGE_CURRENT_AMPS_PER_VOLT);
+}
+
 void ADC2_UpdateBatteryVoltages(void)
 {
-    battery1_voltage = (float)adc2_buffer[0] * 3.3f / 4095.0f * 53.0f / 2.0f + 1.0f;
-    battery2_voltage = (float)adc2_buffer[1] * 3.3f / 4095.0f * 53.0f / 2.0f + 1.0f;
+    battery1_voltage = ADC_RawToVoltage(adc2_buffer[0]) * BATTERY_VOLTAGE_DIVIDER_RATIO;
+    battery2_voltage = ADC_RawToVoltage(adc2_buffer[1]) * BATTERY_VOLTAGE_DIVIDER_RATIO;
+}
+
+uint16_t ADC1_GetLegCurrentADC(uint8_t leg)
+{
+    if (leg >= 4U)
+    {
+        return 0U;
+    }
+
+    return adc1_buffer[leg];
+}
+
+uint16_t ADC2_GetPeripheralDischargeCurrentADC(void)
+{
+    return adc2_buffer[3];
+}
+
+uint16_t ADC1_GetBattery1CurrentADC(void)
+{
+    return adc1_buffer[4];
+}
+
+uint16_t ADC1_GetBattery2CurrentADC(void)
+{
+    return adc1_buffer[5];
 }
 
 uint16_t ADC2_GetBattery1ADC(void)
@@ -48,6 +106,51 @@ uint16_t ADC2_GetBattery1ADC(void)
 uint16_t ADC2_GetBattery2ADC(void)
 {
     return adc2_buffer[1];
+}
+
+float ADC_GetLegCurrent(uint8_t leg)
+{
+    if (leg >= 4U)
+    {
+        return 0.0f;
+    }
+
+    return leg_current[leg];
+}
+
+float ADC_GetLeg1Current(void)
+{
+    return leg_current[0];
+}
+
+float ADC_GetLeg2Current(void)
+{
+    return leg_current[1];
+}
+
+float ADC_GetLeg3Current(void)
+{
+    return leg_current[2];
+}
+
+float ADC_GetLeg4Current(void)
+{
+    return leg_current[3];
+}
+
+float ADC_GetBattery1Current(void)
+{
+    return battery1_current;
+}
+
+float ADC_GetBattery2Current(void)
+{
+    return battery2_current;
+}
+
+float ADC_GetPeripheralDischargeCurrent(void)
+{
+    return peripheral_discharge_current;
 }
 
 float ADC2_GetBattery1Voltage(void)
