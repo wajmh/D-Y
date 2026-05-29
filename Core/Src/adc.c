@@ -34,9 +34,15 @@ float battery1_current = 0.0f;
 float battery2_current = 0.0f;
 float peripheral_discharge_current = 0.0f;
 
+#define ADC_LEG_CURRENT_OFFSET_SAMPLE_COUNT 500U
+#define ADC_LEG_CURRENT_FILTER_ALPHA 0.20f
 #define ADC_BATTERY_VOLTAGE_MEDIAN_SIZE 5U
 #define ADC_BATTERY_CURRENT_MEDIAN_SIZE 5U
 
+static uint16_t legCurrentOffsetRaw[4] = {0U, 0U, 0U, 0U};
+static uint16_t peripheralDischargeCurrentOffsetRaw = 0U;
+static uint8_t legCurrentFilterInitialized = 0U;
+static uint8_t peripheralDischargeCurrentFilterInitialized = 0U;
 static float battery1VoltageSamples[ADC_BATTERY_VOLTAGE_MEDIAN_SIZE] = {0.0f};
 static float battery2VoltageSamples[ADC_BATTERY_VOLTAGE_MEDIAN_SIZE] = {0.0f};
 static float battery1CurrentSamples[ADC_BATTERY_CURRENT_MEDIAN_SIZE] = {0.0f};
@@ -58,6 +64,21 @@ static float ADC_RawToVoltage(uint16_t raw)
 static float ADC_CurrentFromRaw(uint16_t raw, float zeroVoltage, float ampsPerVolt)
 {
     return (ADC_RawToVoltage(raw) - zeroVoltage) * ampsPerVolt ;
+}
+
+static float ADC_LegCurrentFromRaw(uint8_t leg, uint16_t raw)
+{
+    return (ADC_RawToVoltage(raw) - ADC_RawToVoltage(legCurrentOffsetRaw[leg])) * LEG_CURRENT_AMPS_PER_VOLT;
+}
+
+static float ADC_PeripheralDischargeCurrentFromRaw(uint16_t raw)
+{
+    return (ADC_RawToVoltage(raw) - ADC_RawToVoltage(peripheralDischargeCurrentOffsetRaw)) * PERIPHERAL_DISCHARGE_CURRENT_AMPS_PER_VOLT;
+}
+
+static float ADC_LowPassFilter(float previous, float sample)
+{
+    return previous + (ADC_LEG_CURRENT_FILTER_ALPHA * (sample - previous));
 }
 
 static float ADC_MedianFilterVoltage(float sample,
@@ -146,15 +167,70 @@ void ADC2_StartDMA(void)
     HAL_ADC_Start_DMA(&hadc2, (uint32_t *)adc2_buffer, 4);
 }
 
+void ADC_CalibrateLegCurrentOffsets(void)
+{
+    uint32_t sum[4] = {0U, 0U, 0U, 0U};
+    uint32_t peripheralDischargeCurrentSum = 0U;
+    uint16_t i;
+
+    for (i = 0U; i < ADC_LEG_CURRENT_OFFSET_SAMPLE_COUNT; i++)
+    {
+        sum[0] += adc1_buffer[0];
+        sum[1] += adc1_buffer[1];
+        sum[2] += adc1_buffer[2];
+        sum[3] += adc1_buffer[3];
+        peripheralDischargeCurrentSum += adc2_buffer[3];
+        HAL_Delay(1U);
+    }
+
+    legCurrentOffsetRaw[0] = (uint16_t)(sum[0] / ADC_LEG_CURRENT_OFFSET_SAMPLE_COUNT);
+    legCurrentOffsetRaw[1] = (uint16_t)(sum[1] / ADC_LEG_CURRENT_OFFSET_SAMPLE_COUNT);
+    legCurrentOffsetRaw[2] = (uint16_t)(sum[2] / ADC_LEG_CURRENT_OFFSET_SAMPLE_COUNT);
+    legCurrentOffsetRaw[3] = (uint16_t)(sum[3] / ADC_LEG_CURRENT_OFFSET_SAMPLE_COUNT);
+    peripheralDischargeCurrentOffsetRaw = (uint16_t)(peripheralDischargeCurrentSum / ADC_LEG_CURRENT_OFFSET_SAMPLE_COUNT);
+    legCurrentFilterInitialized = 0U;
+    peripheralDischargeCurrentFilterInitialized = 0U;
+}
+
 void ADC_UpdateCurrents(void)
 {
+    float legCurrentSample[4];
+    float peripheralDischargeCurrentSample;
     float battery1Current;
     float battery2Current;
 
-    leg_current[0] = ADC_CurrentFromRaw(adc1_buffer[0], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
-    leg_current[1] = ADC_CurrentFromRaw(adc1_buffer[1], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
-    leg_current[2] = ADC_CurrentFromRaw(adc1_buffer[2], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
-    leg_current[3] = ADC_CurrentFromRaw(adc1_buffer[3], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
+    legCurrentSample[0] = ADC_LegCurrentFromRaw(0U, adc1_buffer[0]);
+    legCurrentSample[1] = ADC_LegCurrentFromRaw(1U, adc1_buffer[1]);
+    legCurrentSample[2] = ADC_LegCurrentFromRaw(2U, adc1_buffer[2]);
+    legCurrentSample[3] = ADC_LegCurrentFromRaw(3U, adc1_buffer[3]);
+
+    if (legCurrentFilterInitialized == 0U)
+    {
+        leg_current[0] = legCurrentSample[0];
+        leg_current[1] = legCurrentSample[1];
+        leg_current[2] = legCurrentSample[2];
+        leg_current[3] = legCurrentSample[3];
+        legCurrentFilterInitialized = 1U;
+    }
+    else
+    {
+        leg_current[0] = ADC_LowPassFilter(leg_current[0], legCurrentSample[0]);
+        leg_current[1] = ADC_LowPassFilter(leg_current[1], legCurrentSample[1]);
+        leg_current[2] = ADC_LowPassFilter(leg_current[2], legCurrentSample[2]);
+        leg_current[3] = ADC_LowPassFilter(leg_current[3], legCurrentSample[3]);
+    }
+
+    peripheralDischargeCurrentSample = ADC_PeripheralDischargeCurrentFromRaw(adc2_buffer[3]);
+    if (peripheralDischargeCurrentFilterInitialized == 0U)
+    {
+        peripheral_discharge_current = peripheralDischargeCurrentSample;
+        peripheralDischargeCurrentFilterInitialized = 1U;
+    }
+    else
+    {
+        peripheral_discharge_current = ADC_LowPassFilter(peripheral_discharge_current, peripheralDischargeCurrentSample);
+    }
+
     battery1Current = ADC_CurrentFromRaw(adc1_buffer[4], CURRENT_ZERO_VOLTAGE, BATTERY_CURRENT_AMPS_PER_VOLT);
     battery2Current = ADC_CurrentFromRaw(adc1_buffer[5], CURRENT_ZERO_VOLTAGE, BATTERY_CURRENT_AMPS_PER_VOLT);
     battery1_current = ADC_MedianFilterCurrent(battery1Current,
@@ -165,9 +241,6 @@ void ADC_UpdateCurrents(void)
                                                battery2CurrentSamples,
                                                &battery2CurrentSampleIndex,
                                                &battery2CurrentSampleCount);
-    peripheral_discharge_current = ADC_CurrentFromRaw(adc2_buffer[3],
-                                                      CURRENT_ZERO_VOLTAGE,
-                                                      PERIPHERAL_DISCHARGE_CURRENT_AMPS_PER_VOLT);
 }
 
 void ADC2_UpdateBatteryVoltages(void)
@@ -195,9 +268,24 @@ uint16_t ADC1_GetLegCurrentADC(uint8_t leg)
     return adc1_buffer[leg];
 }
 
+uint16_t ADC1_GetLegCurrentOffsetADC(uint8_t leg)
+{
+    if (leg >= 4U)
+    {
+        return 0U;
+    }
+
+    return legCurrentOffsetRaw[leg];
+}
+
 uint16_t ADC2_GetPeripheralDischargeCurrentADC(void)
 {
     return adc2_buffer[3];
+}
+
+uint16_t ADC2_GetPeripheralDischargeCurrentOffsetADC(void)
+{
+    return peripheralDischargeCurrentOffsetRaw;
 }
 
 uint16_t ADC2_GetBattery1ADC(void)

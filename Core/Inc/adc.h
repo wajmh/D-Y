@@ -60,11 +60,14 @@ void MX_ADC2_Init(void);
 /* ADC2 DMA 电池电压读取 */
 void ADC1_StartDMA(void);
 void ADC2_StartDMA(void);
+void ADC_CalibrateLegCurrentOffsets(void);
 void ADC_UpdateCurrents(void);
 uint16_t ADC1_GetLegCurrentADC(uint8_t leg);
+uint16_t ADC1_GetLegCurrentOffsetADC(uint8_t leg);
 uint16_t ADC1_GetBattery1CurrentADC(void);
 uint16_t ADC1_GetBattery2CurrentADC(void);
 uint16_t ADC2_GetPeripheralDischargeCurrentADC(void);
+uint16_t ADC2_GetPeripheralDischargeCurrentOffsetADC(void);
 float ADC_GetLegCurrent(uint8_t leg);
 float ADC_GetLeg1Current(void);
 float ADC_GetLeg2Current(void);

@@ -103,6 +103,7 @@ int main(void)
   ADC1_StartDMA();//DMA ADC init
   ADC2_StartDMA();
   HAL_Delay(20);
+  ADC_CalibrateLegCurrentOffsets();
   ADC_UpdateCurrents();
   ADC2_UpdateBatteryVoltages();
   FDCAN_BatteryCanStart();
