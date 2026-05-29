@@ -21,6 +21,274 @@
 #include "fdcan.h"
 
 /* USER CODE BEGIN 0 */
+#define FDCAN_BATTERY_STATUS_ID_BASE 0x04028000U
+#define FDCAN_BATTERY_STATUS_ID_MASK 0x1FFFFF00U
+#define FDCAN_BATTERY_MOS_ID_BASE    0x04068000U
+#define FDCAN_BATTERY_MOS_ID_MASK    0x1FFFFF00U
+#define FDCAN_BATTERY_INFO_ID_BASE   0x04038000U
+#define FDCAN_BATTERY_FAULT_ID_BASE  0x040E8000U
+#define FDCAN_BATTERY_TEMP_ID_BASE   0x04078000U
+#define FDCAN_BATTERY_ID_MASK        0x1FFFFF00U
+
+static uint8_t batteryCanStarted = 0U;
+static uint32_t batteryCanLastTxTick = 0U;
+volatile uint32_t battery_can_forward_count = 0U;
+volatile uint32_t battery_can_forward_drop_count = 0U;
+volatile float battery1_can_sum_voltage = 0.0f;
+volatile float battery1_can_current = 0.0f;
+volatile uint32_t battery1_can_rx_id = 0U;
+volatile uint32_t battery1_can_rx_count = 0U;
+volatile uint32_t battery1_can_status_last_rx_tick = 0U;
+volatile uint8_t battery1_can_charge_mos_state = 0U;
+volatile uint8_t battery1_can_discharge_mos_state = 0U;
+volatile uint32_t battery1_can_mos_rx_id = 0U;
+volatile uint32_t battery1_can_mos_rx_count = 0U;
+volatile uint32_t battery1_can_mos_last_rx_tick = 0U;
+volatile float battery2_can_sum_voltage = 0.0f;
+volatile float battery2_can_current = 0.0f;
+volatile uint32_t battery2_can_rx_id = 0U;
+volatile uint32_t battery2_can_rx_count = 0U;
+volatile uint32_t battery2_can_status_last_rx_tick = 0U;
+volatile uint8_t battery2_can_charge_mos_state = 0U;
+volatile uint8_t battery2_can_discharge_mos_state = 0U;
+volatile uint32_t battery2_can_mos_rx_id = 0U;
+volatile uint32_t battery2_can_mos_rx_count = 0U;
+volatile uint32_t battery2_can_mos_last_rx_tick = 0U;
+
+static void FDCAN_IncrementDebugCounter(volatile uint32_t *counter)
+{
+  if (*counter < 0xFFFFFFFFU)
+  {
+    (*counter)++;
+  }
+}
+
+static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
+{
+  static const uint32_t filterIdBases[] =
+  {
+    FDCAN_BATTERY_STATUS_ID_BASE,
+    FDCAN_BATTERY_MOS_ID_BASE,
+    FDCAN_BATTERY_INFO_ID_BASE,
+    FDCAN_BATTERY_FAULT_ID_BASE,
+    FDCAN_BATTERY_TEMP_ID_BASE
+  };
+  FDCAN_FilterTypeDef filterConfig;
+  uint32_t filterIndex;
+
+  filterConfig.IdType = FDCAN_EXTENDED_ID;
+  filterConfig.FilterType = FDCAN_FILTER_MASK;
+  filterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+
+  for (filterIndex = 0U; filterIndex < (sizeof(filterIdBases) / sizeof(filterIdBases[0])); filterIndex++)
+  {
+    filterConfig.FilterIndex = filterIndex;
+    filterConfig.FilterID1 = filterIdBases[filterIndex];
+    filterConfig.FilterID2 = FDCAN_BATTERY_ID_MASK;
+
+    if (HAL_FDCAN_ConfigFilter(hfdcan, &filterConfig) != HAL_OK)
+    {
+      Error_Handler();
+    }
+  }
+}
+
+static uint8_t FDCAN_IsBatteryForwardFrame(uint32_t rxId)
+{
+  uint32_t idBase = rxId & FDCAN_BATTERY_ID_MASK;
+
+  return ((idBase == FDCAN_BATTERY_STATUS_ID_BASE) ||
+          (idBase == FDCAN_BATTERY_INFO_ID_BASE) ||
+          (idBase == FDCAN_BATTERY_FAULT_ID_BASE) ||
+          (idBase == FDCAN_BATTERY_TEMP_ID_BASE)) ? 1U : 0U;
+}
+
+static void FDCAN_ForwardBatteryFrameToRk(uint8_t batteryIndex,
+                                          const FDCAN_RxHeaderTypeDef *rxHeader,
+                                          const uint8_t rxData[])
+{
+  FDCAN_TxHeaderTypeDef txHeader;
+
+  if ((rxHeader->IdType != FDCAN_EXTENDED_ID) ||
+      (FDCAN_IsBatteryForwardFrame(rxHeader->Identifier) == 0U))
+  {
+    return;
+  }
+
+  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
+  {
+    FDCAN_IncrementDebugCounter(&battery_can_forward_drop_count);
+    return;
+  }
+
+  txHeader.Identifier = (rxHeader->Identifier & FDCAN_BATTERY_ID_MASK) | ((uint32_t)batteryIndex & 0xFFU);
+  txHeader.IdType = FDCAN_EXTENDED_ID;
+  txHeader.TxFrameType = rxHeader->RxFrameType;
+  txHeader.DataLength = rxHeader->DataLength;
+  txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  txHeader.BitRateSwitch = FDCAN_BRS_OFF;
+  txHeader.FDFormat = FDCAN_CLASSIC_CAN;
+  txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+  txHeader.MessageMarker = batteryIndex;
+
+  if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, rxData) == HAL_OK)
+  {
+    FDCAN_IncrementDebugCounter(&battery_can_forward_count);
+  }
+  else
+  {
+    FDCAN_IncrementDebugCounter(&battery_can_forward_drop_count);
+  }
+}
+
+static void FDCAN_ParseBatteryStatus(uint8_t batteryIndex, uint32_t rxId, const uint8_t rxData[])
+{
+  uint16_t rawVoltage = ((uint16_t)rxData[0] << 8) | rxData[1];
+  uint16_t rawCurrent = ((uint16_t)rxData[2] << 8) | rxData[3];
+  float sumVoltage = (float)rawVoltage * 0.1f;
+  float current = ((float)rawCurrent - 30000.0f) * 0.1f;
+
+  if (batteryIndex == 1U)
+  {
+    battery1_can_sum_voltage = sumVoltage;
+    battery1_can_current = current;
+    battery1_can_rx_id = rxId;
+    FDCAN_IncrementDebugCounter(&battery1_can_rx_count);
+    battery1_can_status_last_rx_tick = HAL_GetTick();
+  }
+  else
+  {
+    battery2_can_sum_voltage = sumVoltage;
+    battery2_can_current = current;
+    battery2_can_rx_id = rxId;
+    FDCAN_IncrementDebugCounter(&battery2_can_rx_count);
+    battery2_can_status_last_rx_tick = HAL_GetTick();
+  }
+}
+
+static void FDCAN_ParseBatteryMosStatus(uint8_t batteryIndex, uint32_t rxId, const uint8_t rxData[])
+{
+  uint8_t chargeMosState = (rxData[0] != 0U) ? 1U : 0U;
+  uint8_t dischargeMosState = (rxData[1] != 0U) ? 1U : 0U;
+
+  if (batteryIndex == 1U)
+  {
+    battery1_can_charge_mos_state = chargeMosState;
+    battery1_can_discharge_mos_state = dischargeMosState;
+    battery1_can_mos_rx_id = rxId;
+    FDCAN_IncrementDebugCounter(&battery1_can_mos_rx_count);
+    battery1_can_mos_last_rx_tick = HAL_GetTick();
+  }
+  else
+  {
+    battery2_can_charge_mos_state = chargeMosState;
+    battery2_can_discharge_mos_state = dischargeMosState;
+    battery2_can_mos_rx_id = rxId;
+    FDCAN_IncrementDebugCounter(&battery2_can_mos_rx_count);
+    battery2_can_mos_last_rx_tick = HAL_GetTick();
+  }
+}
+
+static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryIndex)
+{
+  FDCAN_RxHeaderTypeDef rxHeader;
+  uint8_t rxData[8];
+
+  while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO0) > 0U)
+  {
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
+    {
+      return;
+    }
+
+    FDCAN_ForwardBatteryFrameToRk(batteryIndex, &rxHeader, rxData);
+
+    if ((rxHeader.IdType == FDCAN_EXTENDED_ID) &&
+        ((rxHeader.Identifier & FDCAN_BATTERY_STATUS_ID_MASK) == FDCAN_BATTERY_STATUS_ID_BASE) &&
+        (rxHeader.DataLength >= FDCAN_DLC_BYTES_4))
+    {
+      FDCAN_ParseBatteryStatus(batteryIndex, rxHeader.Identifier, rxData);
+    }
+    else if ((rxHeader.IdType == FDCAN_EXTENDED_ID) &&
+             ((rxHeader.Identifier & FDCAN_BATTERY_MOS_ID_MASK) == FDCAN_BATTERY_MOS_ID_BASE) &&
+             (rxHeader.DataLength >= FDCAN_DLC_BYTES_2))
+    {
+      FDCAN_ParseBatteryMosStatus(batteryIndex, rxHeader.Identifier, rxData);
+    }
+  }
+}
+
+static HAL_StatusTypeDef FDCAN_SendBatteryWakeFrame(FDCAN_HandleTypeDef *hfdcan, uint8_t marker)
+{
+  FDCAN_TxHeaderTypeDef txHeader;
+  uint8_t txData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+
+  if (HAL_FDCAN_GetTxFifoFreeLevel(hfdcan) == 0U)
+  {
+    return HAL_BUSY;
+  }
+
+  txHeader.Identifier = 0x0400FF80U;
+  txHeader.IdType = FDCAN_EXTENDED_ID;
+  txHeader.TxFrameType = FDCAN_DATA_FRAME;
+  txHeader.DataLength = FDCAN_DLC_BYTES_8;
+  txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  txHeader.BitRateSwitch = FDCAN_BRS_OFF;
+  txHeader.FDFormat = FDCAN_CLASSIC_CAN;
+  txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+  txHeader.MessageMarker = marker;
+
+  return HAL_FDCAN_AddMessageToTxFifoQ(hfdcan, &txHeader, txData);
+}
+
+void FDCAN_BatteryCanStart(void)
+{
+  if (batteryCanStarted != 0U)
+  {
+    return;
+  }
+
+  FDCAN_ConfigBatteryRxFilters(&hfdcan1);
+  FDCAN_ConfigBatteryRxFilters(&hfdcan2);
+
+  if (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  if (HAL_FDCAN_Start(&hfdcan2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  if (HAL_FDCAN_Start(&hfdcan3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  batteryCanStarted = 1U;
+  batteryCanLastTxTick = HAL_GetTick();
+}//负责初始化接收过滤器并启动 CAN。
+
+void FDCAN_BatteryCanTask(void)
+{
+  if (batteryCanStarted == 0U)
+  {
+    return;
+  }
+
+  FDCAN_PollBatteryRx(&hfdcan1, 1U);
+  FDCAN_PollBatteryRx(&hfdcan2, 2U);
+
+  if ((HAL_GetTick() - batteryCanLastTxTick) < 2000U)
+  {
+    return;
+  }
+
+  batteryCanLastTxTick = HAL_GetTick();
+  (void)FDCAN_SendBatteryWakeFrame(&hfdcan1, 1U);
+  (void)FDCAN_SendBatteryWakeFrame(&hfdcan2, 2U);
+}//负责初始化接收过滤器并启动 CAN。
 
 /* USER CODE END 0 */
 
@@ -46,7 +314,7 @@ void MX_FDCAN1_Init(void)
   hfdcan1.Init.AutoRetransmission = ENABLE;
   hfdcan1.Init.TransmitPause = DISABLE;
   hfdcan1.Init.ProtocolException = DISABLE;
-  hfdcan1.Init.NominalPrescaler = 10;
+  hfdcan1.Init.NominalPrescaler = 40;
   hfdcan1.Init.NominalSyncJumpWidth = 1;
   hfdcan1.Init.NominalTimeSeg1 = 13;
   hfdcan1.Init.NominalTimeSeg2 = 3;
@@ -55,7 +323,7 @@ void MX_FDCAN1_Init(void)
   hfdcan1.Init.DataTimeSeg1 = 1;
   hfdcan1.Init.DataTimeSeg2 = 1;
   hfdcan1.Init.StdFiltersNbr = 1;
-  hfdcan1.Init.ExtFiltersNbr = 1;
+  hfdcan1.Init.ExtFiltersNbr = 5;
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
   {
@@ -84,7 +352,7 @@ void MX_FDCAN2_Init(void)
   hfdcan2.Init.AutoRetransmission = ENABLE;
   hfdcan2.Init.TransmitPause = DISABLE;
   hfdcan2.Init.ProtocolException = DISABLE;
-  hfdcan2.Init.NominalPrescaler = 10;
+  hfdcan2.Init.NominalPrescaler = 40;
   hfdcan2.Init.NominalSyncJumpWidth = 1;
   hfdcan2.Init.NominalTimeSeg1 = 13;
   hfdcan2.Init.NominalTimeSeg2 = 3;
@@ -93,7 +361,7 @@ void MX_FDCAN2_Init(void)
   hfdcan2.Init.DataTimeSeg1 = 1;
   hfdcan2.Init.DataTimeSeg2 = 1;
   hfdcan2.Init.StdFiltersNbr = 1;
-  hfdcan2.Init.ExtFiltersNbr = 1;
+  hfdcan2.Init.ExtFiltersNbr = 5;
   hfdcan2.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan2) != HAL_OK)
   {
@@ -122,7 +390,7 @@ void MX_FDCAN3_Init(void)
   hfdcan3.Init.AutoRetransmission = ENABLE;
   hfdcan3.Init.TransmitPause = DISABLE;
   hfdcan3.Init.ProtocolException = DISABLE;
-  hfdcan3.Init.NominalPrescaler = 10;
+  hfdcan3.Init.NominalPrescaler = 40;
   hfdcan3.Init.NominalSyncJumpWidth = 1;
   hfdcan3.Init.NominalTimeSeg1 = 13;
   hfdcan3.Init.NominalTimeSeg2 = 3;

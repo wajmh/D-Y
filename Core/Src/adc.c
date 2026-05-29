@@ -34,6 +34,22 @@ float battery1_current = 0.0f;
 float battery2_current = 0.0f;
 float peripheral_discharge_current = 0.0f;
 
+#define ADC_BATTERY_VOLTAGE_MEDIAN_SIZE 5U
+#define ADC_BATTERY_CURRENT_MEDIAN_SIZE 5U
+
+static float battery1VoltageSamples[ADC_BATTERY_VOLTAGE_MEDIAN_SIZE] = {0.0f};
+static float battery2VoltageSamples[ADC_BATTERY_VOLTAGE_MEDIAN_SIZE] = {0.0f};
+static float battery1CurrentSamples[ADC_BATTERY_CURRENT_MEDIAN_SIZE] = {0.0f};
+static float battery2CurrentSamples[ADC_BATTERY_CURRENT_MEDIAN_SIZE] = {0.0f};
+static uint8_t battery1VoltageSampleIndex = 0U;
+static uint8_t battery2VoltageSampleIndex = 0U;
+static uint8_t battery1CurrentSampleIndex = 0U;
+static uint8_t battery2CurrentSampleIndex = 0U;
+static uint8_t battery1VoltageSampleCount = 0U;
+static uint8_t battery2VoltageSampleCount = 0U;
+static uint8_t battery1CurrentSampleCount = 0U;
+static uint8_t battery2CurrentSampleCount = 0U;
+
 static float ADC_RawToVoltage(uint16_t raw)
 {
     return (float)raw * ADC_REFERENCE_VOLTAGE / ADC_MAX_RAW_VALUE;
@@ -41,7 +57,83 @@ static float ADC_RawToVoltage(uint16_t raw)
 
 static float ADC_CurrentFromRaw(uint16_t raw, float zeroVoltage, float ampsPerVolt)
 {
-    return (ADC_RawToVoltage(raw) - zeroVoltage) * ampsPerVolt;
+    return (ADC_RawToVoltage(raw) - zeroVoltage) * ampsPerVolt ;
+}
+
+static float ADC_MedianFilterVoltage(float sample,
+                                     float samples[],
+                                     uint8_t *sampleIndex,
+                                     uint8_t *sampleCount)
+{
+    float sortedSamples[ADC_BATTERY_VOLTAGE_MEDIAN_SIZE];
+    float temp;
+    uint8_t i;
+    uint8_t j;
+
+    samples[*sampleIndex] = sample;
+    *sampleIndex = (uint8_t)((*sampleIndex + 1U) % ADC_BATTERY_VOLTAGE_MEDIAN_SIZE);
+
+    if (*sampleCount < ADC_BATTERY_VOLTAGE_MEDIAN_SIZE)
+    {
+        (*sampleCount)++;
+    }
+
+    for (i = 0U; i < *sampleCount; i++)
+    {
+        sortedSamples[i] = samples[i];
+    }
+
+    for (i = 1U; i < *sampleCount; i++)
+    {
+        temp = sortedSamples[i];
+        j = i;
+        while ((j > 0U) && (sortedSamples[j - 1U] > temp))
+        {
+            sortedSamples[j] = sortedSamples[j - 1U];
+            j--;
+        }
+        sortedSamples[j] = temp;
+    }
+
+    return sortedSamples[*sampleCount / 2U];
+}
+
+static float ADC_MedianFilterCurrent(float sample,
+                                     float samples[],
+                                     uint8_t *sampleIndex,
+                                     uint8_t *sampleCount)
+{
+    float sortedSamples[ADC_BATTERY_CURRENT_MEDIAN_SIZE];
+    float temp;
+    uint8_t i;
+    uint8_t j;
+
+    samples[*sampleIndex] = sample;
+    *sampleIndex = (uint8_t)((*sampleIndex + 1U) % ADC_BATTERY_CURRENT_MEDIAN_SIZE);
+
+    if (*sampleCount < ADC_BATTERY_CURRENT_MEDIAN_SIZE)
+    {
+        (*sampleCount)++;
+    }
+
+    for (i = 0U; i < *sampleCount; i++)
+    {
+        sortedSamples[i] = samples[i];
+    }
+
+    for (i = 1U; i < *sampleCount; i++)
+    {
+        temp = sortedSamples[i];
+        j = i;
+        while ((j > 0U) && (sortedSamples[j - 1U] > temp))
+        {
+            sortedSamples[j] = sortedSamples[j - 1U];
+            j--;
+        }
+        sortedSamples[j] = temp;
+    }
+
+    return sortedSamples[*sampleCount / 2U];
 }
 
 void ADC1_StartDMA(void)
@@ -56,12 +148,23 @@ void ADC2_StartDMA(void)
 
 void ADC_UpdateCurrents(void)
 {
+    float battery1Current;
+    float battery2Current;
+
     leg_current[0] = ADC_CurrentFromRaw(adc1_buffer[0], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
     leg_current[1] = ADC_CurrentFromRaw(adc1_buffer[1], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
     leg_current[2] = ADC_CurrentFromRaw(adc1_buffer[2], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
     leg_current[3] = ADC_CurrentFromRaw(adc1_buffer[3], CURRENT_ZERO_VOLTAGE, LEG_CURRENT_AMPS_PER_VOLT);
-    battery1_current = ADC_CurrentFromRaw(adc1_buffer[4], CURRENT_ZERO_VOLTAGE, BATTERY_CURRENT_AMPS_PER_VOLT);
-    battery2_current = ADC_CurrentFromRaw(adc1_buffer[5], CURRENT_ZERO_VOLTAGE, BATTERY_CURRENT_AMPS_PER_VOLT);
+    battery1Current = ADC_CurrentFromRaw(adc1_buffer[4], CURRENT_ZERO_VOLTAGE, BATTERY_CURRENT_AMPS_PER_VOLT);
+    battery2Current = ADC_CurrentFromRaw(adc1_buffer[5], CURRENT_ZERO_VOLTAGE, BATTERY_CURRENT_AMPS_PER_VOLT);
+    battery1_current = ADC_MedianFilterCurrent(battery1Current,
+                                               battery1CurrentSamples,
+                                               &battery1CurrentSampleIndex,
+                                               &battery1CurrentSampleCount);
+    battery2_current = ADC_MedianFilterCurrent(battery2Current,
+                                               battery2CurrentSamples,
+                                               &battery2CurrentSampleIndex,
+                                               &battery2CurrentSampleCount);
     peripheral_discharge_current = ADC_CurrentFromRaw(adc2_buffer[3],
                                                       CURRENT_ZERO_VOLTAGE,
                                                       PERIPHERAL_DISCHARGE_CURRENT_AMPS_PER_VOLT);
@@ -69,8 +172,17 @@ void ADC_UpdateCurrents(void)
 
 void ADC2_UpdateBatteryVoltages(void)
 {
-    battery1_voltage = ADC_RawToVoltage(adc2_buffer[0]) * BATTERY_VOLTAGE_DIVIDER_RATIO;
-    battery2_voltage = ADC_RawToVoltage(adc2_buffer[1]) * BATTERY_VOLTAGE_DIVIDER_RATIO;
+    float battery1Voltage = ADC_RawToVoltage(adc2_buffer[0]) * BATTERY_VOLTAGE_DIVIDER_RATIO + 0.9f;
+    float battery2Voltage = ADC_RawToVoltage(adc2_buffer[1]) * BATTERY_VOLTAGE_DIVIDER_RATIO + 0.9f;
+
+    battery1_voltage = ADC_MedianFilterVoltage(battery1Voltage,
+                                               battery1VoltageSamples,
+                                               &battery1VoltageSampleIndex,
+                                               &battery1VoltageSampleCount);
+    battery2_voltage = ADC_MedianFilterVoltage(battery2Voltage,
+                                               battery2VoltageSamples,
+                                               &battery2VoltageSampleIndex,
+                                               &battery2VoltageSampleCount);
 }
 
 uint16_t ADC1_GetLegCurrentADC(uint8_t leg)
@@ -88,16 +200,6 @@ uint16_t ADC2_GetPeripheralDischargeCurrentADC(void)
     return adc2_buffer[3];
 }
 
-uint16_t ADC1_GetBattery1CurrentADC(void)
-{
-    return adc1_buffer[4];
-}
-
-uint16_t ADC1_GetBattery2CurrentADC(void)
-{
-    return adc1_buffer[5];
-}
-
 uint16_t ADC2_GetBattery1ADC(void)
 {
     return adc2_buffer[0];
@@ -107,7 +209,15 @@ uint16_t ADC2_GetBattery2ADC(void)
 {
     return adc2_buffer[1];
 }
+uint16_t ADC1_GetBattery1CurrentADC(void)
+{
+    return adc1_buffer[4];
+}
 
+uint16_t ADC1_GetBattery2CurrentADC(void)
+{
+    return adc1_buffer[5];
+}
 float ADC_GetLegCurrent(uint8_t leg)
 {
     if (leg >= 4U)
@@ -138,16 +248,6 @@ float ADC_GetLeg4Current(void)
     return leg_current[3];
 }
 
-float ADC_GetBattery1Current(void)
-{
-    return battery1_current;
-}
-
-float ADC_GetBattery2Current(void)
-{
-    return battery2_current;
-}
-
 float ADC_GetPeripheralDischargeCurrent(void)
 {
     return peripheral_discharge_current;
@@ -161,6 +261,15 @@ float ADC2_GetBattery1Voltage(void)
 float ADC2_GetBattery2Voltage(void)
 {
     return battery2_voltage;
+}
+float ADC_GetBattery1Current(void)
+{
+    return battery1_current;
+}
+
+float ADC_GetBattery2Current(void)
+{
+    return battery2_current;
 }
 
 /* USER CODE END 0 */
@@ -220,7 +329,7 @@ void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_6;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_47CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_247CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
@@ -319,7 +428,7 @@ void MX_ADC2_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_3;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_47CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_247CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;

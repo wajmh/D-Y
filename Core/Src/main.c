@@ -105,6 +105,7 @@ int main(void)
   HAL_Delay(20);
   ADC_UpdateCurrents();
   ADC2_UpdateBatteryVoltages();
+  FDCAN_BatteryCanStart();
   Power_UpdateGpioDebugStates();//mos管的检测
   Power_EnterDischargeMode();//初始化双电池状态
 
@@ -117,11 +118,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    ADC_UpdateCurrents();
-    ADC2_UpdateBatteryVoltages();
+    ADC_UpdateCurrents();//放电电流的更新
+    ADC2_UpdateBatteryVoltages();//电池电压的更新
+    FDCAN_BatteryCanTask();
     Power_UpdateGpioDebugStates();
     Power_DischargeModeTask();
-    HAL_Delay(10);
   }
   /* USER CODE END 3 */
 }
