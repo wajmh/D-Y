@@ -21,6 +21,8 @@
 #include "fdcan.h"
 
 /* USER CODE BEGIN 0 */
+#include "adc.h"
+
 #define FDCAN_BATTERY_STATUS_ID_BASE 0x04028000U
 #define FDCAN_BATTERY_STATUS_ID_MASK 0x1FFFFF00U
 #define FDCAN_BATTERY_MOS_ID_BASE    0x04068000U
@@ -29,9 +31,15 @@
 #define FDCAN_BATTERY_FAULT_ID_BASE  0x040E8000U
 #define FDCAN_BATTERY_TEMP_ID_BASE   0x04078000U
 #define FDCAN_BATTERY_ID_MASK        0x1FFFFF00U
+#define FDCAN_LEG_CURRENT_REPORT_ID  0x04100000U
+#define FDCAN_PERIPHERAL_CURRENT_REPORT_ID 0x04200000U
+#define FDCAN_CURRENT_REPORT_PERIOD_MS 200U
+#define FDCAN_CURRENT_REPORT_SCALE    100.0f
+#define FDCAN_BATTERY_WAKE_PERIOD_MS  2000U
 
 static uint8_t batteryCanStarted = 0U;
 static uint32_t batteryCanLastTxTick = 0U;
+static uint32_t currentReportLastTxTick = 0U;
 volatile uint32_t battery_can_forward_count = 0U;
 volatile uint32_t battery_can_forward_drop_count = 0U;
 volatile float battery1_can_sum_voltage = 0.0f;
@@ -61,6 +69,71 @@ static void FDCAN_IncrementDebugCounter(volatile uint32_t *counter)
   {
     (*counter)++;
   }
+}
+
+static int16_t FDCAN_CurrentToCanRaw(float current)
+{
+  float scaled = current * FDCAN_CURRENT_REPORT_SCALE;
+
+  if (scaled > 32767.0f)
+  {
+    return 32767;
+  }
+
+  if (scaled < -32768.0f)
+  {
+    return -32768;
+  }
+
+  return (int16_t)((scaled >= 0.0f) ? (scaled + 0.5f) : (scaled - 0.5f));
+}
+
+static void FDCAN_PackInt16LittleEndian(uint8_t data[], uint8_t offset, int16_t value)
+{
+  uint16_t raw = (uint16_t)value;
+
+  data[offset] = (uint8_t)(raw & 0xFFU);
+  data[offset + 1U] = (uint8_t)((raw >> 8) & 0xFFU);
+}
+
+static HAL_StatusTypeDef FDCAN_SendCurrentReport(uint32_t identifier, const uint8_t txData[])
+{
+  FDCAN_TxHeaderTypeDef txHeader;
+
+  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
+  {
+    return HAL_BUSY;
+  }
+
+  txHeader.Identifier = identifier;
+  txHeader.IdType = FDCAN_EXTENDED_ID;
+  txHeader.TxFrameType = FDCAN_DATA_FRAME;
+  txHeader.DataLength = FDCAN_DLC_BYTES_8;
+  txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  txHeader.BitRateSwitch = FDCAN_BRS_OFF;
+  txHeader.FDFormat = FDCAN_CLASSIC_CAN;
+  txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+  txHeader.MessageMarker = 0U;
+
+  return HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, (uint8_t *)txData);
+}
+
+static void FDCAN_SendCurrentReportsToRk(void)
+{
+  uint8_t legCurrentData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+  uint8_t peripheralCurrentData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+
+  FDCAN_PackInt16LittleEndian(legCurrentData, 0U, FDCAN_CurrentToCanRaw(ADC_GetLeg1Current()));
+  FDCAN_PackInt16LittleEndian(legCurrentData, 2U, FDCAN_CurrentToCanRaw(ADC_GetLeg2Current()));
+  FDCAN_PackInt16LittleEndian(legCurrentData, 4U, FDCAN_CurrentToCanRaw(ADC_GetLeg3Current()));
+  FDCAN_PackInt16LittleEndian(legCurrentData, 6U, FDCAN_CurrentToCanRaw(ADC_GetLeg4Current()));
+
+  FDCAN_PackInt16LittleEndian(peripheralCurrentData,
+                              0U,
+                              FDCAN_CurrentToCanRaw(ADC_GetPeripheralDischargeCurrent()));
+
+  (void)FDCAN_SendCurrentReport(FDCAN_LEG_CURRENT_REPORT_ID, legCurrentData);
+  (void)FDCAN_SendCurrentReport(FDCAN_PERIPHERAL_CURRENT_REPORT_ID, peripheralCurrentData);
 }
 
 static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
@@ -267,25 +340,36 @@ void FDCAN_BatteryCanStart(void)
   }
 
   batteryCanStarted = 1U;
-  batteryCanLastTxTick = HAL_GetTick();
+  batteryCanLastTxTick = HAL_GetTick() - FDCAN_BATTERY_WAKE_PERIOD_MS;
+  currentReportLastTxTick = HAL_GetTick();
 }//负责初始化接收过滤器并启动 CAN。
 
 void FDCAN_BatteryCanTask(void)
 {
+  uint32_t now;
+
   if (batteryCanStarted == 0U)
   {
     return;
   }
 
+  now = HAL_GetTick();
+
   FDCAN_PollBatteryRx(&hfdcan1, 1U);
   FDCAN_PollBatteryRx(&hfdcan2, 2U);
 
-  if ((HAL_GetTick() - batteryCanLastTxTick) < 2000U)
+  if ((now - currentReportLastTxTick) >= FDCAN_CURRENT_REPORT_PERIOD_MS)
+  {
+    currentReportLastTxTick = now;
+    FDCAN_SendCurrentReportsToRk();
+  }
+
+  if ((now - batteryCanLastTxTick) < FDCAN_BATTERY_WAKE_PERIOD_MS)
   {
     return;
   }
 
-  batteryCanLastTxTick = HAL_GetTick();
+  batteryCanLastTxTick = now;
   (void)FDCAN_SendBatteryWakeFrame(&hfdcan1, 1U);
   (void)FDCAN_SendBatteryWakeFrame(&hfdcan2, 2U);
 }//负责初始化接收过滤器并启动 CAN。

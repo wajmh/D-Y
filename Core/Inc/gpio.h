@@ -66,11 +66,13 @@ extern "C" {
 /* 急停有效电平：如果急停低电平有效，改成 GPIO_PIN_RESET */
 #define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_SET
 /* 预放电等待时间，单位 ms */
-#define POWER_PRE_DISCHARGE_DELAY_MS       500U
+#define POWER_PRE_DISCHARGE_DELAY_MS       1500U
 /* CAN 超过该时间未收到状态帧时，认为电池通信掉线 */
 #define POWER_BATTERY_CAN_TIMEOUT_MS       2000U
 /* 双电池回充 MOS 切换阈值，两个电池压差超过该值时只开高电压电池回充 */
 #define POWER_RECHARGE_BALANCE_DIFF        0.10f
+/* 关低压回充 MOS 后，等待控制脚读回 OFF 的超时时间 */
+#define POWER_RECHARGE_SWITCH_TIMEOUT_MS   5U
 /* 双回充 MOS 打开后，某路电流占总电流低于该比例，认为疑似未放电 */
 #define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
 /* 电流占比异常持续时间，单位 ms */
