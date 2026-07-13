@@ -22,6 +22,7 @@
 
 /* USER CODE BEGIN 0 */
 #include "adc.h"
+#include "gpio.h"
 
 #define FDCAN_BATTERY_STATUS_ID_BASE 0x04028000U
 #define FDCAN_BATTERY_STATUS_ID_MASK 0x1FFFFF00U
@@ -33,13 +34,16 @@
 #define FDCAN_BATTERY_ID_MASK        0x1FFFFF00U
 #define FDCAN_LEG_CURRENT_REPORT_ID  0x04100000U
 #define FDCAN_PERIPHERAL_CURRENT_REPORT_ID 0x04200000U
+#define FDCAN_ESTOP_REPORT_ID        0x04300000U
 #define FDCAN_CURRENT_REPORT_PERIOD_MS 200U
+#define FDCAN_ESTOP_REPORT_PERIOD_MS 50U
 #define FDCAN_CURRENT_REPORT_SCALE    100.0f
 #define FDCAN_BATTERY_WAKE_PERIOD_MS  2000U
 
 static uint8_t batteryCanStarted = 0U;
 static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t currentReportLastTxTick = 0U;
+static uint32_t estopReportLastTxTick = 0U;
 volatile uint32_t battery_can_forward_count = 0U;
 volatile uint32_t battery_can_forward_drop_count = 0U;
 volatile float battery1_can_sum_voltage = 0.0f;
@@ -134,6 +138,13 @@ static void FDCAN_SendCurrentReportsToRk(void)
 
   (void)FDCAN_SendCurrentReport(FDCAN_LEG_CURRENT_REPORT_ID, legCurrentData);
   (void)FDCAN_SendCurrentReport(FDCAN_PERIPHERAL_CURRENT_REPORT_ID, peripheralCurrentData);
+}
+
+static void FDCAN_SendEmergencyStopReportToRk(void)
+{
+  uint8_t estopData[8] = {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+
+  (void)FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
 }
 
 static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
@@ -342,6 +353,7 @@ void FDCAN_BatteryCanStart(void)
   batteryCanStarted = 1U;
   batteryCanLastTxTick = HAL_GetTick() - FDCAN_BATTERY_WAKE_PERIOD_MS;
   currentReportLastTxTick = HAL_GetTick();
+  estopReportLastTxTick = HAL_GetTick() - FDCAN_ESTOP_REPORT_PERIOD_MS;
 }//负责初始化接收过滤器并启动 CAN。
 
 void FDCAN_BatteryCanTask(void)
@@ -357,6 +369,13 @@ void FDCAN_BatteryCanTask(void)
 
   FDCAN_PollBatteryRx(&hfdcan1, 1U);
   FDCAN_PollBatteryRx(&hfdcan2, 2U);
+
+  if ((Power_IsEmergencyStopActive() != 0U) &&
+      ((now - estopReportLastTxTick) >= FDCAN_ESTOP_REPORT_PERIOD_MS))
+  {
+    estopReportLastTxTick = now;
+    FDCAN_SendEmergencyStopReportToRk();
+  }
 
   if ((now - currentReportLastTxTick) >= FDCAN_CURRENT_REPORT_PERIOD_MS)
   {

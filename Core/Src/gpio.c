@@ -242,7 +242,24 @@ GPIO_PinState Power_ReadEmergencyStop(void)
 
 uint8_t Power_IsEmergencyStopActive(void)
 {
-  return (Power_ReadEmergencyStop() == POWER_ESTOP_ACTIVE_STATE) ? 1U : 0U;
+  static GPIO_PinState lastRawState = GPIO_PIN_SET;
+  static GPIO_PinState debouncedState = GPIO_PIN_SET;
+  static uint32_t lastChangeTick = 0U;
+  GPIO_PinState rawState = Power_ReadEmergencyStop();
+  uint32_t now = HAL_GetTick();
+
+  if (rawState != lastRawState)
+  {
+    lastRawState = rawState;
+    lastChangeTick = now;
+  }
+
+  if ((now - lastChangeTick) >= POWER_ESTOP_DEBOUNCE_MS)
+  {
+    debouncedState = lastRawState;
+  }
+
+  return (debouncedState == POWER_ESTOP_ACTIVE_STATE) ? 1U : 0U;
 }
 
 static uint8_t Power_IsBatteryCanReady(uint8_t batteryIndex)

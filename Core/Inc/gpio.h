@@ -64,7 +64,8 @@ extern "C" {
 #define POWER_SWITCH_ON                    GPIO_PIN_SET
 #define POWER_SWITCH_OFF                   GPIO_PIN_RESET
 /* 急停有效电平：如果急停低电平有效，改成 GPIO_PIN_RESET */
-#define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_SET
+#define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_RESET
+#define POWER_ESTOP_DEBOUNCE_MS            30U
 /* 预放电等待时间，单位 ms */
 #define POWER_PRE_DISCHARGE_DELAY_MS       1500U
 /* CAN 超过该时间未收到状态帧时，认为电池通信掉线 */

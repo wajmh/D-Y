@@ -38,3 +38,4 @@ d-y\fdcan.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_pwr_ex.h
 d-y\fdcan.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart.h
 d-y\fdcan.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart_ex.h
 d-y\fdcan.o: ../Core/Inc/adc.h
+d-y\fdcan.o: ../Core/Inc/gpio.h

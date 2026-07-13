@@ -43,9 +43,9 @@ I (../Core/Inc/dma.h)(0x6A0596BB)
 I (../Core/Inc/fdcan.h)(0x6A17AB66)
 I (../Core/Inc/i2c.h)(0x6A057AC5)
 I (../Core/Inc/usart.h)(0x6A057AC5)
-I (../Core/Inc/gpio.h)(0x6A20088E)
-F (../Core/Src/gpio.c)(0x6A2054BA)(--c99 -c --cpu Cortex-M4.fp.sp -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I ../Drivers/CMSIS/Include-I.\RTE\_D-Y-ID:\Keil5\Packs\ARM\CMSIS\5.9.0\CMSIS\Core\Include-D__UVISION_VERSION="539" -D_RTE_ -DSTM32G474xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32G474xx-o d-y\gpio.o --omf_browse d-y\gpio.crf --depend d-y\gpio.d)
-I (../Core/Inc/gpio.h)(0x6A20088E)
+I (../Core/Inc/gpio.h)(0x6A4CE24E)
+F (../Core/Src/gpio.c)(0x6A4CE24E)(--c99 -c --cpu Cortex-M4.fp.sp -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I ../Drivers/CMSIS/Include-I.\RTE\_D-Y-ID:\Keil5\Packs\ARM\CMSIS\5.9.0\CMSIS\Core\Include-D__UVISION_VERSION="539" -D_RTE_ -DSTM32G474xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32G474xx-o d-y\gpio.o --omf_browse d-y\gpio.crf --depend d-y\gpio.d)
+I (../Core/Inc/gpio.h)(0x6A4CE24E)
 I (../Core/Inc/main.h)(0x6A057A1F)
 I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal.h)(0x6A057A0E)
 I (../Core/Inc/stm32g4xx_hal_conf.h)(0x6A057A1F)
@@ -159,7 +159,7 @@ I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_pwr.h)(0x6A057A0E)
 I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_pwr_ex.h)(0x6A057A0E)
 I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart.h)(0x6A057A0E)
 I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart_ex.h)(0x6A057A0E)
-F (../Core/Src/fdcan.c)(0x6A1EB390)(--c99 -c --cpu Cortex-M4.fp.sp -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I ../Drivers/CMSIS/Include-I.\RTE\_D-Y-ID:\Keil5\Packs\ARM\CMSIS\5.9.0\CMSIS\Core\Include-D__UVISION_VERSION="539" -D_RTE_ -DSTM32G474xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32G474xx-o d-y\fdcan.o --omf_browse d-y\fdcan.crf --depend d-y\fdcan.d)
+F (../Core/Src/fdcan.c)(0x6A4CE27B)(--c99 -c --cpu Cortex-M4.fp.sp -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I ../Drivers/CMSIS/Include-I.\RTE\_D-Y-ID:\Keil5\Packs\ARM\CMSIS\5.9.0\CMSIS\Core\Include-D__UVISION_VERSION="539" -D_RTE_ -DSTM32G474xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32G474xx-o d-y\fdcan.o --omf_browse d-y\fdcan.crf --depend d-y\fdcan.d)
 I (../Core/Inc/fdcan.h)(0x6A17AB66)
 I (../Core/Inc/main.h)(0x6A057A1F)
 I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal.h)(0x6A057A0E)
@@ -198,6 +198,7 @@ I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_pwr_ex.h)(0x6A057A0E)
 I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart.h)(0x6A057A0E)
 I (../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart_ex.h)(0x6A057A0E)
 I (../Core/Inc/adc.h)(0x6A192BE9)
+I (../Core/Inc/gpio.h)(0x6A4CE24E)
 F (../Core/Src/i2c.c)(0x6A057F3E)(--c99 -c --cpu Cortex-M4.fp.sp -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc -I ../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I ../Drivers/CMSIS/Include-I.\RTE\_D-Y-ID:\Keil5\Packs\ARM\CMSIS\5.9.0\CMSIS\Core\Include-D__UVISION_VERSION="539" -D_RTE_ -DSTM32G474xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32G474xx-o d-y\i2c.o --omf_browse d-y\i2c.crf --depend d-y\i2c.d)
 I (../Core/Inc/i2c.h)(0x6A057AC5)
 I (../Core/Inc/main.h)(0x6A057A1F)
