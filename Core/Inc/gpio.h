@@ -67,7 +67,8 @@ extern "C" {
 #define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_RESET
 #define POWER_ESTOP_DEBOUNCE_MS            30U
 /* 预放电等待时间，单位 ms */
-#define POWER_PRE_DISCHARGE_DELAY_MS       1500U
+#define POWER_PRE_DISCHARGE_DELAY_MS       480U
+#define POWER_PRE_DISCHARGE_DELAY          200U
 /* CAN 超过该时间未收到状态帧时，认为电池通信掉线 */
 #define POWER_BATTERY_CAN_TIMEOUT_MS       2000U
 /* 双电池回充 MOS 切换阈值，两个电池压差超过该值时只开高电压电池回充 */

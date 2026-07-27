@@ -3,7 +3,7 @@
 <title>Static Call Graph - [D-Y\D-Y.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image D-Y\D-Y.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Tue Jul 07 19:28:18 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Thu Jul 23 05:36:38 2026
 <BR><P>
 <H3>Maximum Stack Usage =        232 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -950,7 +950,9 @@ Global Symbols
 </UL>
 <BR>[Calls]<UL><LI><a href="#[9d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GetTick
 </UL>
-<BR>[Called By]<UL><LI><a href="#[92]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ADC_CalibrateLegCurrentOffsets
+<BR>[Called By]<UL><LI><a href="#[11e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_EnableBattery2DischargePath
+<LI><a href="#[11d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_EnableBattery1DischargePath
+<LI><a href="#[92]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ADC_CalibrateLegCurrentOffsets
 <LI><a href="#[83]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
 </UL>
 
@@ -1025,8 +1027,8 @@ Global Symbols
 <BR><BR>[Stack]<UL><LI>Max Depth = 184<LI>Call Chain = HAL_FDCAN_Init &rArr; HAL_FDCAN_MspInit &rArr; HAL_NVIC_SetPriority &rArr; __NVIC_SetPriority
 </UL>
 <BR>[Calls]<UL><LI><a href="#[9d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GetTick
-<LI><a href="#[e6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_FDCAN_MspInit
 <LI><a href="#[e7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FDCAN_CalcultateRamBlockAddresses
+<LI><a href="#[e6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_FDCAN_MspInit
 </UL>
 <BR>[Called By]<UL><LI><a href="#[10a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MX_FDCAN3_Init
 <LI><a href="#[109]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MX_FDCAN2_Init
@@ -1172,9 +1174,9 @@ Global Symbols
 <P><STRONG><a name="[ec]"></a>HAL_Init</STRONG> (Thumb, 30 bytes, Stack size 8 bytes, stm32g4xx_hal.o(i.HAL_Init))
 <BR><BR>[Stack]<UL><LI>Max Depth = 72<LI>Call Chain = HAL_Init &rArr; HAL_InitTick &rArr; HAL_NVIC_SetPriority &rArr; __NVIC_SetPriority
 </UL>
-<BR>[Calls]<UL><LI><a href="#[ef]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_MspInit
-<LI><a href="#[ee]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_InitTick
+<BR>[Calls]<UL><LI><a href="#[ee]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_InitTick
 <LI><a href="#[ed]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_NVIC_SetPriorityGrouping
+<LI><a href="#[ef]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_MspInit
 </UL>
 <BR>[Called By]<UL><LI><a href="#[83]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
 </UL>
@@ -1212,8 +1214,8 @@ Global Symbols
 <LI><a href="#[f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__NVIC_GetPriorityGrouping
 </UL>
 <BR>[Called By]<UL><LI><a href="#[107]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MX_DMA_Init
-<LI><a href="#[e6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_FDCAN_MspInit
 <LI><a href="#[ee]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_InitTick
+<LI><a href="#[e6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_FDCAN_MspInit
 </UL>
 
 <P><STRONG><a name="[ed]"></a>HAL_NVIC_SetPriorityGrouping</STRONG> (Thumb, 32 bytes, Stack size 0 bytes, stm32g4xx_hal_cortex.o(i.HAL_NVIC_SetPriorityGrouping))
@@ -1449,7 +1451,7 @@ Global Symbols
 <P><STRONG><a name="[b]"></a>PendSV_Handler</STRONG> (Thumb, 2 bytes, Stack size 0 bytes, stm32g4xx_it.o(i.PendSV_Handler))
 <BR>[Address Reference Count : 1]<UL><LI> startup_stm32g474xx.o(RESET)
 </UL>
-<P><STRONG><a name="[112]"></a>Power_AllMosOff</STRONG> (Thumb, 130 bytes, Stack size 8 bytes, gpio.o(i.Power_AllMosOff))
+<P><STRONG><a name="[112]"></a>Power_AllMosOff</STRONG> (Thumb, 128 bytes, Stack size 8 bytes, gpio.o(i.Power_AllMosOff))
 <BR><BR>[Stack]<UL><LI>Max Depth = 8<LI>Call Chain = Power_AllMosOff
 </UL>
 <BR>[Calls]<UL><LI><a href="#[10c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_WritePin
@@ -1631,21 +1633,23 @@ Local Symbols
 <LI><a href="#[11d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_EnableBattery1DischargePath
 </UL>
 
-<P><STRONG><a name="[11d]"></a>Power_EnableBattery1DischargePath</STRONG> (Thumb, 40 bytes, Stack size 8 bytes, gpio.o(i.Power_EnableBattery1DischargePath))
+<P><STRONG><a name="[11d]"></a>Power_EnableBattery1DischargePath</STRONG> (Thumb, 58 bytes, Stack size 8 bytes, gpio.o(i.Power_EnableBattery1DischargePath))
 <BR><BR>[Stack]<UL><LI>Max Depth = 24<LI>Call Chain = Power_EnableBattery1DischargePath &rArr; Power_DisableLowerRechargeMosBeforeNewDischarge
 </UL>
 <BR>[Calls]<UL><LI><a href="#[10c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_WritePin
 <LI><a href="#[115]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_DisableLowerRechargeMosBeforeNewDischarge
+<LI><a href="#[93]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_Delay
 </UL>
 <BR>[Called By]<UL><LI><a href="#[119]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_UpdateBattery1Path
 <LI><a href="#[120]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_FinishBattery1PreDischarge
 </UL>
 
-<P><STRONG><a name="[11e]"></a>Power_EnableBattery2DischargePath</STRONG> (Thumb, 38 bytes, Stack size 8 bytes, gpio.o(i.Power_EnableBattery2DischargePath))
+<P><STRONG><a name="[11e]"></a>Power_EnableBattery2DischargePath</STRONG> (Thumb, 56 bytes, Stack size 8 bytes, gpio.o(i.Power_EnableBattery2DischargePath))
 <BR><BR>[Stack]<UL><LI>Max Depth = 24<LI>Call Chain = Power_EnableBattery2DischargePath &rArr; Power_DisableLowerRechargeMosBeforeNewDischarge
 </UL>
 <BR>[Calls]<UL><LI><a href="#[10c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_WritePin
 <LI><a href="#[115]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_DisableLowerRechargeMosBeforeNewDischarge
+<LI><a href="#[93]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_Delay
 </UL>
 <BR>[Called By]<UL><LI><a href="#[11a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_UpdateBattery2Path
 <LI><a href="#[121]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_FinishBattery2PreDischarge
@@ -1716,7 +1720,7 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[11a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_UpdateBattery2Path
 </UL>
 
-<P><STRONG><a name="[119]"></a>Power_UpdateBattery1Path</STRONG> (Thumb, 90 bytes, Stack size 8 bytes, gpio.o(i.Power_UpdateBattery1Path))
+<P><STRONG><a name="[119]"></a>Power_UpdateBattery1Path</STRONG> (Thumb, 88 bytes, Stack size 8 bytes, gpio.o(i.Power_UpdateBattery1Path))
 <BR><BR>[Stack]<UL><LI>Max Depth = 40<LI>Call Chain = Power_UpdateBattery1Path &rArr; Power_FinishBattery1PreDischarge &rArr; Power_EnableBattery1DischargePath &rArr; Power_DisableLowerRechargeMosBeforeNewDischarge
 </UL>
 <BR>[Calls]<UL><LI><a href="#[9d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GetTick
@@ -1729,7 +1733,7 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[117]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Power_DischargeModeTask
 </UL>
 
-<P><STRONG><a name="[11a]"></a>Power_UpdateBattery2Path</STRONG> (Thumb, 90 bytes, Stack size 8 bytes, gpio.o(i.Power_UpdateBattery2Path))
+<P><STRONG><a name="[11a]"></a>Power_UpdateBattery2Path</STRONG> (Thumb, 88 bytes, Stack size 8 bytes, gpio.o(i.Power_UpdateBattery2Path))
 <BR><BR>[Stack]<UL><LI>Max Depth = 40<LI>Call Chain = Power_UpdateBattery2Path &rArr; Power_FinishBattery2PreDischarge &rArr; Power_EnableBattery2DischargePath &rArr; Power_DisableLowerRechargeMosBeforeNewDischarge
 </UL>
 <BR>[Calls]<UL><LI><a href="#[9d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GetTick
