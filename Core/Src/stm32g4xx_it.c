@@ -57,6 +57,7 @@
 /* External variables --------------------------------------------------------*/
 extern DMA_HandleTypeDef hdma_adc1;
 extern DMA_HandleTypeDef hdma_adc2;
+extern COMP_HandleTypeDef hcomp7;
 extern FDCAN_HandleTypeDef hfdcan1;
 extern FDCAN_HandleTypeDef hfdcan2;
 extern FDCAN_HandleTypeDef hfdcan3;
@@ -256,6 +257,20 @@ void FDCAN1_IT1_IRQHandler(void)
   /* USER CODE BEGIN FDCAN1_IT1_IRQn 1 */
 
   /* USER CODE END FDCAN1_IT1_IRQn 1 */
+}
+
+/**
+  * @brief This function handles COMP7 interrupt through EXTI line 33.
+  */
+void COMP7_IRQHandler(void)
+{
+  /* USER CODE BEGIN COMP7_IRQn 0 */
+
+  /* USER CODE END COMP7_IRQn 0 */
+  HAL_COMP_IRQHandler(&hcomp7);
+  /* USER CODE BEGIN COMP7_IRQn 1 */
+
+  /* USER CODE END COMP7_IRQn 1 */
 }
 
 /**

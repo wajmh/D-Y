@@ -19,9 +19,12 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
+#include "comp.h"
+#include "dac.h"
 #include "dma.h"
 #include "fdcan.h"
 #include "i2c.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -37,6 +40,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define VBUS_DISCHARGE_DAC_VALUE            1707U
 
 /* USER CODE END PD */
 
@@ -48,17 +52,64 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+volatile uint8_t vbus_discharge_comp_triggered = 0U;
+volatile uint8_t vbus_discharge_pwm_active = 0U;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+static void VBUS_DischargeStartPwm(void);
+static void VBUS_DischargeStopPwm(void);
+static void VBUS_DischargeUpdateByComp(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void VBUS_DischargeStartPwm(void)
+{
+  if (vbus_discharge_pwm_active == 0U)
+  {
+    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4) == HAL_OK)
+    {
+      vbus_discharge_pwm_active = 1U;
+    }
+  }
+}
+
+static void VBUS_DischargeStopPwm(void)
+{
+  if (vbus_discharge_pwm_active != 0U)
+  {
+    if (HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_4) == HAL_OK)
+    {
+      vbus_discharge_pwm_active = 0U;
+    }
+  }
+}
+
+static void VBUS_DischargeUpdateByComp(void)
+{
+  if (HAL_COMP_GetOutputLevel(&hcomp7) == COMP_OUTPUT_LEVEL_HIGH)
+  {
+    VBUS_DischargeStartPwm();
+  }
+  else
+  {
+    VBUS_DischargeStopPwm();
+  }
+}
+
+void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
+{
+  if (hcomp->Instance == COMP7)
+  {
+    vbus_discharge_comp_triggered = 1U;
+    VBUS_DischargeStartPwm();
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -99,7 +150,24 @@ int main(void)
   MX_FDCAN3_Init();
   MX_I2C1_Init();
   MX_USART2_UART_Init();
+  MX_COMP7_Init();
+  MX_DAC2_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+  if (HAL_DAC_SetValue(&hdac2, DAC_CHANNEL_1, DAC_ALIGN_12B_R, VBUS_DISCHARGE_DAC_VALUE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_DAC_Start(&hdac2, DAC_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  HAL_Delay(1U);
+  if (HAL_COMP_Start(&hcomp7) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
   ADC1_StartDMA();//DMA ADC init
   ADC2_StartDMA();
   HAL_Delay(20);
@@ -124,6 +192,7 @@ int main(void)
     FDCAN_BatteryCanTask();
     Power_UpdateGpioDebugStates();
     Power_DischargeModeTask();
+    VBUS_DischargeUpdateByComp();
   }
   /* USER CODE END 3 */
 }

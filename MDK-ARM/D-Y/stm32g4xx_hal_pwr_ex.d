@@ -24,6 +24,10 @@ d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_co
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_adc.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_ll_adc.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_adc_ex.h
+d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_comp.h
+d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_ll_exti.h
+d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_dac.h
+d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_dac_ex.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_exti.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_fdcan.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_flash.h
@@ -33,5 +37,7 @@ d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_i2
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_i2c_ex.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_pwr.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_pwr_ex.h
+d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_tim.h
+d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_tim_ex.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart.h
 d-y\stm32g4xx_hal_pwr_ex.o: ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart_ex.h
