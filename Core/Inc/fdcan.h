@@ -43,26 +43,20 @@ extern FDCAN_HandleTypeDef hfdcan3;
 /* USER CODE END Private defines */
 
 /* USER CODE BEGIN Prototypes */
-extern volatile uint32_t battery_can_forward_count;
-extern volatile uint32_t battery_can_forward_drop_count;
 extern volatile float battery1_can_sum_voltage;
 extern volatile float battery1_can_current;
-extern volatile uint32_t battery1_can_rx_id;
 extern volatile uint32_t battery1_can_rx_count;
 extern volatile uint32_t battery1_can_status_last_rx_tick;
 extern volatile uint8_t battery1_can_charge_mos_state;
 extern volatile uint8_t battery1_can_discharge_mos_state;
-extern volatile uint32_t battery1_can_mos_rx_id;
 extern volatile uint32_t battery1_can_mos_rx_count;
 extern volatile uint32_t battery1_can_mos_last_rx_tick;
 extern volatile float battery2_can_sum_voltage;
 extern volatile float battery2_can_current;
-extern volatile uint32_t battery2_can_rx_id;
 extern volatile uint32_t battery2_can_rx_count;
 extern volatile uint32_t battery2_can_status_last_rx_tick;
 extern volatile uint8_t battery2_can_charge_mos_state;
 extern volatile uint8_t battery2_can_discharge_mos_state;
-extern volatile uint32_t battery2_can_mos_rx_id;
 extern volatile uint32_t battery2_can_mos_rx_count;
 extern volatile uint32_t battery2_can_mos_last_rx_tick;
 
@@ -72,6 +66,7 @@ void MX_FDCAN3_Init(void);
 
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
+HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex);
 
 /* USER CODE END Prototypes */
 

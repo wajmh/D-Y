@@ -103,9 +103,8 @@ int main(void)
   ADC1_StartDMA();//DMA ADC init
   ADC2_StartDMA();
   HAL_Delay(20);
-  ADC_CalibrateLegCurrentOffsets();
-  ADC_UpdateCurrents();
-  ADC2_UpdateBatteryVoltages();
+  ADC_CalibrateLegCurrentOffsets();//腿部电流零点校准
+  ADC_UpdateCurrents();//转换实际电流值
   FDCAN_BatteryCanStart();
   Power_UpdateGpioDebugStates();//mos管的检测
   Power_EnterDischargeMode();//初始化双电池状态
@@ -120,10 +119,9 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     ADC_UpdateCurrents();//放电电流的更新
-    ADC2_UpdateBatteryVoltages();//电池电压的更新
     FDCAN_BatteryCanTask();
     Power_UpdateGpioDebugStates();
-    Power_DischargeModeTask();
+    Power_ModeTask();
   }
   /* USER CODE END 3 */
 }

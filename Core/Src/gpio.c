@@ -31,6 +31,12 @@ typedef enum
   POWER_BATTERY_STATE_DISCHARGE
 } PowerBatteryState_t;
 
+typedef enum
+{
+  POWER_WORK_MODE_DISCHARGE = 0,
+  POWER_WORK_MODE_CHARGE
+} PowerWorkMode_t;
+
 typedef struct
 {
   PowerBatteryState_t state;
@@ -39,11 +45,15 @@ typedef struct
 static PowerBatteryControl_t battery1Control = {POWER_BATTERY_STATE_OFF};
 static PowerBatteryControl_t battery2Control = {POWER_BATTERY_STATE_OFF};
 static uint8_t dischargeModeEnabled = 0U;
+static PowerWorkMode_t powerWorkMode = POWER_WORK_MODE_DISCHARGE;
 static uint8_t powerPreDischargeDone = 0U;
 static uint8_t powerPreDischargeBatteryIndex = 0U;
 static uint32_t battery1PreDischargeStartTick = 0U;
 static uint32_t battery2PreDischargeStartTick = 0U;
 static uint8_t rechargeCurrentOnlyMode = 0U;
+static uint8_t chargeCurrentOnlyMode = 0U;
+static uint8_t chargeReplyBatteryIndex = 0U;
+static uint32_t chargeReplyLastTxTick = 0U;
 
 volatile uint8_t bat1_charge_mos_state = 0U;
 volatile uint8_t bat1_discharge_mos_state = 0U;
@@ -73,6 +83,9 @@ static void Power_UpdateBattery2Path(uint8_t present);
 static void Power_DisableBattery1Path(void);
 static void Power_DisableBattery2Path(void);
 static void Power_UpdateRechargeMos(uint8_t battery1Ready, uint8_t battery2Ready);
+static uint8_t Power_IsBatteryCanPresent(uint8_t batteryIndex);
+static void Power_SetChargeMos(uint8_t mask);
+static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Present);
 /* USER CODE END 0 */
 
 /*----------------------------------------------------------------------------*/
@@ -179,14 +192,17 @@ void Power_AllMosOff(void)
 HAL_StatusTypeDef Power_EnterDischargeMode(void)
 {
   dischargeModeEnabled = 1U;
+  powerWorkMode = POWER_WORK_MODE_DISCHARGE;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  chargeReplyBatteryIndex = 0U;
+  chargeReplyLastTxTick = HAL_GetTick();
 
-  Power_DischargeModeTask();
+  Power_ModeTask();
   return HAL_OK;
 }
 
-void Power_DischargeModeTask(void)
+void Power_ModeTask(void)
 {
   uint8_t battery1Present;
   uint8_t battery2Present;
@@ -196,8 +212,17 @@ void Power_DischargeModeTask(void)
     return;
   }
 
-  battery1Present = Power_IsBatteryCanReady(1U);
+  battery1Present = Power_IsBatteryCanReady(1U);//can和mos都正常才认为电池在位
   battery2Present = Power_IsBatteryCanReady(2U);
+
+  if (powerWorkMode == POWER_WORK_MODE_CHARGE)
+  {
+    battery1Present = Power_IsBatteryCanPresent(1U);//can通信掉线时，认为电池不在位
+    battery2Present = Power_IsBatteryCanPresent(2U);
+    Power_UpdateChargeMode(battery1Present, battery2Present);
+    Power_UpdatePeripheralPower(battery1Present, battery2Present);
+    return;
+  }
 
   if ((battery1Present == 0U) && (battery2Present == 0U))
   {
@@ -215,23 +240,50 @@ void Power_DischargeModeTask(void)
 void Power_ExitDischargeMode(void)
 {
   dischargeModeEnabled = 0U;
+  powerWorkMode = POWER_WORK_MODE_DISCHARGE;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  chargeReplyBatteryIndex = 0U;
+  chargeReplyLastTxTick = HAL_GetTick();
   Power_AllMosOff();
 }
 
-void Power_TestBattery1DischargeSequence(void)
+HAL_StatusTypeDef Power_EnterChargeMode(void)
 {
-  
-  Power_AllMosOff();
+  if (powerWorkMode == POWER_WORK_MODE_CHARGE)
+  {
+    return HAL_OK;
+  }
 
-  HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_Delay(POWER_PRE_DISCHARGE_DELAY_MS);
-  HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  dischargeModeEnabled = 1U;
+  powerWorkMode = POWER_WORK_MODE_CHARGE;
+  rechargeCurrentOnlyMode = 0U;
+  chargeCurrentOnlyMode = 0U;
+  chargeReplyBatteryIndex = 0U;
+  chargeReplyLastTxTick = HAL_GetTick() - POWER_CHARGE_REPLY_PERIOD_MS;
+
+  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+
+  Power_ModeTask();
+  return HAL_OK;
+}
+
+void Power_ExitChargeMode(void)
+{
+  if (powerWorkMode == POWER_WORK_MODE_CHARGE)
+  {
+    HAL_GPIO_WritePin(BAT1_CHARGE_MOS_GPIO_Port, BAT1_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+    HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+
+    powerWorkMode = POWER_WORK_MODE_DISCHARGE;
+    rechargeCurrentOnlyMode = 0U;
+    chargeCurrentOnlyMode = 0U;
+    chargeReplyBatteryIndex = 0U;
+    chargeReplyLastTxTick = HAL_GetTick();
+
+    Power_ModeTask();
+  }
 }
 
 GPIO_PinState Power_ReadEmergencyStop(void)
@@ -279,6 +331,20 @@ static uint8_t Power_IsBatteryCanReady(uint8_t batteryIndex)
           ((now - battery2_can_status_last_rx_tick) <= POWER_BATTERY_CAN_TIMEOUT_MS) &&
           ((now - battery2_can_mos_last_rx_tick) <= POWER_BATTERY_CAN_TIMEOUT_MS) &&
           (battery2_can_discharge_mos_state != 0U)) ? 1U : 0U;
+}
+
+static uint8_t Power_IsBatteryCanPresent(uint8_t batteryIndex)
+{
+  uint32_t now = HAL_GetTick();
+
+  if (batteryIndex == 1U)
+  {
+    return ((battery1_can_rx_count != 0U) &&
+            ((now - battery1_can_status_last_rx_tick) <= POWER_BATTERY_CAN_TIMEOUT_MS)) ? 1U : 0U;
+  }
+
+  return ((battery2_can_rx_count != 0U) &&
+          ((now - battery2_can_status_last_rx_tick) <= POWER_BATTERY_CAN_TIMEOUT_MS)) ? 1U : 0U;
 }
 
 static float Power_GetBatteryCanVoltage(uint8_t batteryIndex)
@@ -335,6 +401,96 @@ static void Power_SetRechargeMos(uint8_t mask)
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port,
                     BAT2_RECHARGE_MOS_Pin,
                     ((mask & 0x02U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
+}
+
+static void Power_SetChargeMos(uint8_t mask)
+{
+  HAL_GPIO_WritePin(BAT1_CHARGE_MOS_GPIO_Port,
+                    BAT1_CHARGE_MOS_Pin,
+                    ((mask & 0x01U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port,
+                    BAT2_CHARGE_MOS_Pin,
+                    ((mask & 0x02U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
+}
+
+static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Present)
+{
+  float battery1Voltage;
+  float battery2Voltage;
+  float voltageDiff;
+  uint8_t chargeMask = 0U;
+  uint8_t replyBatteryIndex = 0U;
+  uint32_t now = HAL_GetTick();
+
+  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  
+  if ((battery1Present != 0U) && (battery2Present != 0U))
+  {
+    battery1Voltage = Power_GetBatteryCanVoltage(1U);
+    battery2Voltage = Power_GetBatteryCanVoltage(2U);
+    voltageDiff = battery1Voltage - battery2Voltage;
+
+    if (chargeCurrentOnlyMode == 0U)
+    {
+      if (voltageDiff > POWER_CHARGE_BALANCE_DIFF)
+      {
+        chargeMask = 0x02U;
+        replyBatteryIndex = 2U;
+      }
+      else if (voltageDiff < -POWER_CHARGE_BALANCE_DIFF)
+      {
+        chargeMask = 0x01U;
+        replyBatteryIndex = 1U;
+      }
+      else
+      {
+        chargeCurrentOnlyMode = 1U;
+      }
+    }
+
+    if (chargeCurrentOnlyMode != 0U)
+    {
+      chargeMask = 0x03U;
+      replyBatteryIndex = (battery1Voltage <= battery2Voltage) ? 1U : 2U;
+    }
+  }
+  else if (battery1Present != 0U)
+  {
+    chargeCurrentOnlyMode = 0U;
+    chargeMask = 0x01U;
+    replyBatteryIndex = 1U;
+  }
+  else if (battery2Present != 0U)
+  {
+    chargeCurrentOnlyMode = 0U;
+    chargeMask = 0x02U;
+    replyBatteryIndex = 2U;
+  }
+  else
+  {
+    chargeCurrentOnlyMode = 0U;
+  }
+
+  Power_SetChargeMos(chargeMask);
+
+  if ((replyBatteryIndex != 0U) &&
+      ((replyBatteryIndex != chargeReplyBatteryIndex) ||
+       ((now - chargeReplyLastTxTick) >= POWER_CHARGE_REPLY_PERIOD_MS)))
+  {
+    chargeReplyLastTxTick = now;
+    if (FDCAN_SendChargeReplyToCan2(replyBatteryIndex) == HAL_OK)
+    {
+      chargeReplyBatteryIndex = replyBatteryIndex;
+    }
+  }
+
+  if (chargeMask == 0U)
+  {
+    chargeCurrentOnlyMode = 0U;
+    chargeReplyBatteryIndex = 0U;
+    chargeReplyLastTxTick = now;
+  }
 }
 
 static void Power_UpdatePeripheralPower(uint8_t battery1Present, uint8_t battery2Present)
@@ -396,7 +552,6 @@ static void Power_EnableBattery1DischargePath(void)
 {
   Power_DisableLowerRechargeMosBeforeNewDischarge(1U);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_Delay(POWER_PRE_DISCHARGE_DELAY);
   HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_OFF);//反接
   battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
@@ -406,7 +561,6 @@ static void Power_EnableBattery2DischargePath(void)
 {
   Power_DisableLowerRechargeMosBeforeNewDischarge(2U);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_Delay(POWER_PRE_DISCHARGE_DELAY);
   HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_OFF);//反接
   battery2Control.state = POWER_BATTERY_STATE_DISCHARGE;
