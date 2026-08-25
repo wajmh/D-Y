@@ -110,3 +110,4 @@ uint8_t Power_IsEmergencyStopActive(void);
 }
 #endif
 #endif /*__ GPIO_H__ */
+
