@@ -41,6 +41,7 @@ static PowerBatteryControl_t battery2Control = {POWER_BATTERY_STATE_OFF};
 static uint8_t dischargeModeEnabled = 0U;
 static uint8_t powerPreDischargeDone = 0U;
 static uint8_t powerPreDischargeBatteryIndex = 0U;
+static uint8_t backEmfAbsorbReleased = 0U;
 static uint32_t battery1PreDischargeStartTick = 0U;
 static uint32_t battery2PreDischargeStartTick = 0U;
 static uint8_t rechargeCurrentOnlyMode = 0U;
@@ -65,6 +66,7 @@ static void Power_StartBattery1PreDischarge(void);
 static void Power_StartBattery2PreDischarge(void);
 static void Power_FinishBattery1PreDischarge(void);
 static void Power_FinishBattery2PreDischarge(void);
+static void Power_ReleaseBackEmfAbsorbOnce(void);
 static void Power_EnableBattery1DischargePath(void);
 static void Power_EnableBattery2DischargePath(void);
 static void Power_DisableLowerRechargeMosBeforeNewDischarge(uint8_t newBatteryIndex);
@@ -162,6 +164,7 @@ void Power_AllMosOff(void)
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_ON);//线接错了，反接下
+  backEmfAbsorbReleased = 0U;
 
   HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
@@ -232,7 +235,7 @@ void Power_TestBattery1DischargeSequence(void)
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-}
+}//测试函数
 
 GPIO_PinState Power_ReadEmergencyStop(void)
 {
@@ -392,13 +395,22 @@ static void Power_FinishBattery2PreDischarge(void)
   powerPreDischargeBatteryIndex = 0U;
 }
 
+static void Power_ReleaseBackEmfAbsorbOnce(void)
+{
+  if (backEmfAbsorbReleased == 0U)
+  {
+    HAL_Delay(POWER_PRE_DISCHARGE_DELAY);
+    HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_OFF);//反接
+    backEmfAbsorbReleased = 1U;
+  }//只操作一次
+}
+
 static void Power_EnableBattery1DischargePath(void)
 {
   Power_DisableLowerRechargeMosBeforeNewDischarge(1U);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_Delay(POWER_PRE_DISCHARGE_DELAY);
-  HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_OFF);//反接
+  Power_ReleaseBackEmfAbsorbOnce();
   battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
 }
 
@@ -407,8 +419,7 @@ static void Power_EnableBattery2DischargePath(void)
   Power_DisableLowerRechargeMosBeforeNewDischarge(2U);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_Delay(POWER_PRE_DISCHARGE_DELAY);
-  HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_OFF);//反接
+  Power_ReleaseBackEmfAbsorbOnce();
   battery2Control.state = POWER_BATTERY_STATE_DISCHARGE;
 }
 
