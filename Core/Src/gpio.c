@@ -22,6 +22,7 @@
 #include "gpio.h"
 
 /* USER CODE BEGIN 0 */
+#include "adc.h"
 #include "fdcan.h"
 
 typedef enum
@@ -45,6 +46,8 @@ static uint8_t backEmfAbsorbReleased = 0U;
 static uint32_t battery1PreDischargeStartTick = 0U;
 static uint32_t battery2PreDischargeStartTick = 0U;
 static uint8_t rechargeCurrentOnlyMode = 0U;
+static uint8_t battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
+static uint8_t battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 
 volatile uint8_t bat1_charge_mos_state = 0U;
 volatile uint8_t bat1_discharge_mos_state = 0U;
@@ -184,6 +187,8 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
   dischargeModeEnabled = 1U;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
+  battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 
   Power_DischargeModeTask();
   return HAL_OK;
@@ -191,28 +196,67 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
 
 void Power_DischargeModeTask(void)
 {
-  uint8_t battery1Present;
-  uint8_t battery2Present;
+  uint8_t bat1CanReady;
+  uint8_t bat2CanReady;
+  uint8_t bat1PhysOnline;
+  uint8_t bat2PhysOnline;
+  uint8_t bat1KeepEnable;
+  uint8_t bat2KeepEnable;
 
   if (dischargeModeEnabled == 0U)
   {
     return;
   }
 
-  battery1Present = Power_IsBatteryCanReady(1U);
-  battery2Present = Power_IsBatteryCanReady(2U);
+  bat1CanReady = Power_IsBatteryCanReady(1U);
+  bat2CanReady = Power_IsBatteryCanReady(2U);
+  bat1PhysOnline = Power_IsBatteryPhysicallyPresent(1U);
+  bat2PhysOnline = Power_IsBatteryPhysicallyPresent(2U);
 
-  if ((battery1Present == 0U) && (battery2Present == 0U))
+  /* 更新电池 1 报警状态：拔出优先于掉线 */
+  if (bat1PhysOnline == 0U)
+  {
+    battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+  }
+  else if (bat1CanReady == 0U)
+  {
+    battery1AlarmStatus = BATTERY_ALARM_STATUS_CAN_COMM_LOST;
+  }
+  else
+  {
+    battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
+  }
+
+  /* 更新电池 2 报警状态：拔出优先于掉线 */
+  if (bat2PhysOnline == 0U)
+  {
+    battery2AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+  }
+  else if (bat2CanReady == 0U)
+  {
+    battery2AlarmStatus = BATTERY_ALARM_STATUS_CAN_COMM_LOST;
+  }
+  else
+  {
+    battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
+  }
+
+  /* 只有在两块电池均被物理拔出/均无物理电压时，才彻底关断所有 MOS */
+  if ((bat1PhysOnline == 0U) && (bat2PhysOnline == 0U))
   {
     Power_AllMosOff();
     return;
   }
 
-  Power_UpdateBattery1Path(battery1Present);
-  Power_UpdateBattery2Path(battery2Present);
+  /* 若 CAN 就绪，或物理电压在线且已处于放电态(真·通信掉线)，均保持放电回路 */
+  bat1KeepEnable = (bat1CanReady != 0U) || ((bat1PhysOnline != 0U) && (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE));
+  bat2KeepEnable = (bat2CanReady != 0U) || ((bat2PhysOnline != 0U) && (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE));
+
+  Power_UpdateBattery1Path(bat1KeepEnable);
+  Power_UpdateBattery2Path(bat2KeepEnable);
   Power_UpdateRechargeMos((battery1Control.state == POWER_BATTERY_STATE_DISCHARGE) ? 1U : 0U,
                           (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE) ? 1U : 0U);
-  Power_UpdatePeripheralPower(battery1Present, battery2Present);//外设供电
+  Power_UpdatePeripheralPower(bat1PhysOnline, bat2PhysOnline);
 }
 
 void Power_ExitDischargeMode(void)
@@ -220,6 +264,8 @@ void Power_ExitDischargeMode(void)
   dischargeModeEnabled = 0U;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
+  battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   Power_AllMosOff();
 }
 
@@ -262,6 +308,22 @@ uint8_t Power_IsEmergencyStopActive(void)
   }
 
   return (debouncedState == POWER_ESTOP_ACTIVE_STATE) ? 1U : 0U;
+}
+
+uint8_t Power_GetBattery1AlarmStatus(void)
+{
+  return battery1AlarmStatus;
+}
+
+uint8_t Power_GetBattery2AlarmStatus(void)
+{
+  return battery2AlarmStatus;
+}
+
+uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex)
+{
+  float voltage = (batteryIndex == 1U) ? battery1_voltage : battery2_voltage;
+  return (voltage >= BATTERY_PHYSICAL_PRESENT_VOLTAGE) ? 1U : 0U;
 }
 
 static uint8_t Power_IsBatteryCanReady(uint8_t batteryIndex)

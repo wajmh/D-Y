@@ -35,8 +35,10 @@
 #define FDCAN_LEG_CURRENT_REPORT_ID  0x04100000U
 #define FDCAN_PERIPHERAL_CURRENT_REPORT_ID 0x04200000U
 #define FDCAN_ESTOP_REPORT_ID        0x04300000U
+#define FDCAN_BATTERY_ALARM_REPORT_ID 0x04400000U
 #define FDCAN_CURRENT_REPORT_PERIOD_MS 200U
 #define FDCAN_ESTOP_REPORT_PERIOD_MS 50U
+#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 50U
 #define FDCAN_CURRENT_REPORT_SCALE    100.0f
 #define FDCAN_BATTERY_WAKE_PERIOD_MS  2000U
 
@@ -44,6 +46,7 @@ static uint8_t batteryCanStarted = 0U;
 static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t currentReportLastTxTick = 0U;
 static uint32_t estopReportLastTxTick = 0U;
+static uint32_t batteryAlarmReportLastTxTick = 0U;
 volatile uint32_t battery_can_forward_count = 0U;
 volatile uint32_t battery_can_forward_drop_count = 0U;
 volatile float battery1_can_sum_voltage = 0.0f;
@@ -145,6 +148,16 @@ static void FDCAN_SendEmergencyStopReportToRk(void)
   uint8_t estopData[8] = {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
 
   (void)FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
+}
+
+void FDCAN_SendBatteryAlarmReportToRk(void)
+{
+  uint8_t alarmData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+
+  alarmData[0] = Power_GetBattery1AlarmStatus();
+  alarmData[1] = Power_GetBattery2AlarmStatus();
+
+  (void)FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
 }
 
 static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
@@ -354,6 +367,7 @@ void FDCAN_BatteryCanStart(void)
   batteryCanLastTxTick = HAL_GetTick() - FDCAN_BATTERY_WAKE_PERIOD_MS;
   currentReportLastTxTick = HAL_GetTick();
   estopReportLastTxTick = HAL_GetTick() - FDCAN_ESTOP_REPORT_PERIOD_MS;
+  batteryAlarmReportLastTxTick = HAL_GetTick() - FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS;
 }//负责初始化接收过滤器并启动 CAN。
 
 void FDCAN_BatteryCanTask(void)
@@ -375,6 +389,14 @@ void FDCAN_BatteryCanTask(void)
   {
     estopReportLastTxTick = now;
     FDCAN_SendEmergencyStopReportToRk();
+  }
+
+  if (((Power_GetBattery1AlarmStatus() != BATTERY_ALARM_STATUS_NORMAL) ||
+       (Power_GetBattery2AlarmStatus() != BATTERY_ALARM_STATUS_NORMAL)) &&
+      ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS))
+  {
+    batteryAlarmReportLastTxTick = now;
+    FDCAN_SendBatteryAlarmReportToRk();
   }
 
   if ((now - currentReportLastTxTick) >= FDCAN_CURRENT_REPORT_PERIOD_MS)

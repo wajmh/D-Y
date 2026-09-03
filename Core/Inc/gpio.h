@@ -79,7 +79,12 @@ extern "C" {
 /* 双回充 MOS 打开后，某路电流占总电流低于该比例，认为疑似未放电 */
 #define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
 /* 电流占比异常持续时间，单位 ms */
-#define POWER_BATTERY_LOW_SHARE_TIME_MS    5000U
+/* 电池物理在线判定电压阈值，低于该值判定为电池拔出，高于等于该值判定为物理在线 (V)，暂定 60V */
+#define BATTERY_PHYSICAL_PRESENT_VOLTAGE   60.0f
+/* 电池异常报警状态定义 */
+#define BATTERY_ALARM_STATUS_NORMAL        0x00U /* 正常在线 */
+#define BATTERY_ALARM_STATUS_CAN_COMM_LOST 0x01U /* CAN 通信掉线，物理在线 (动力仍供电) */
+#define BATTERY_ALARM_STATUS_REMOVED       0x02U /* 电池物理拔出 / 无电压 */
 /* USER CODE END Private defines */
 
 void MX_GPIO_Init(void);
@@ -103,6 +108,9 @@ void Power_DischargeModeTask(void);
 void Power_ExitDischargeMode(void);
 GPIO_PinState Power_ReadEmergencyStop(void);
 uint8_t Power_IsEmergencyStopActive(void);
+uint8_t Power_GetBattery1AlarmStatus(void);
+uint8_t Power_GetBattery2AlarmStatus(void);
+uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex);
 
 /* USER CODE END Prototypes */
 

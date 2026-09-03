@@ -74,8 +74,12 @@ void MX_FDCAN1_Init(void);
 void MX_FDCAN2_Init(void);
 void MX_FDCAN3_Init(void);
 
+#define FDCAN_BATTERY_ALARM_REPORT_ID        0x04400000U
+#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 50U
+
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
+void FDCAN_SendBatteryAlarmReportToRk(void);
 
 /* USER CODE END Prototypes */
 
