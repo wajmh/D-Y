@@ -47,6 +47,14 @@ void MX_FDCAN2_Init(void);
 void MX_FDCAN3_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+/* BMS 上报内部放电 MOS 明确状态枚举 */
+typedef enum
+{
+  BMS_DISCHARGE_MOS_UNKNOWN = 0,    /* 未知 / 初始化 / 未收到有效帧 / 异常值 */
+  BMS_DISCHARGE_MOS_PROHIBITED = 1, /* 明确禁止放电 (BMS 报文明确指示 0x00) */
+  BMS_DISCHARGE_MOS_ALLOWED = 2     /* 明确允许放电 (BMS 报文明确指示 0x01) */
+} BmsDischargeMosState_t;
+
 extern volatile uint32_t battery_can_forward_count;
 extern volatile uint32_t battery_can_forward_drop_count;
 extern volatile float battery1_can_sum_voltage;
@@ -56,6 +64,7 @@ extern volatile uint32_t battery1_can_rx_count;
 extern volatile uint32_t battery1_can_status_last_rx_tick;
 extern volatile uint8_t battery1_can_charge_mos_state;
 extern volatile uint8_t battery1_can_discharge_mos_state;
+extern volatile BmsDischargeMosState_t battery1_bms_discharge_state;
 extern volatile uint32_t battery1_can_mos_rx_id;
 extern volatile uint32_t battery1_can_mos_rx_count;
 extern volatile uint32_t battery1_can_mos_last_rx_tick;
@@ -66,6 +75,7 @@ extern volatile uint32_t battery2_can_rx_count;
 extern volatile uint32_t battery2_can_status_last_rx_tick;
 extern volatile uint8_t battery2_can_charge_mos_state;
 extern volatile uint8_t battery2_can_discharge_mos_state;
+extern volatile BmsDischargeMosState_t battery2_bms_discharge_state;
 extern volatile uint32_t battery2_can_mos_rx_id;
 extern volatile uint32_t battery2_can_mos_rx_count;
 extern volatile uint32_t battery2_can_mos_last_rx_tick;
@@ -74,12 +84,14 @@ void MX_FDCAN1_Init(void);
 void MX_FDCAN2_Init(void);
 void MX_FDCAN3_Init(void);
 
-#define FDCAN_BATTERY_ALARM_REPORT_ID        0x04400000U
-#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 50U
+#define FDCAN_BATTERY_ALARM_REPORT_ID            0x04400000U
+#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS     50U
+#define FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS 1000U
+#define FDCAN_BATTERY_ALARM_CLEAR_BURST_COUNT    10U
 
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
-void FDCAN_SendBatteryAlarmReportToRk(void);
+HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
 
 /* USER CODE END Prototypes */
 

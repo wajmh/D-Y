@@ -76,8 +76,8 @@ flowchart TD
 ### 报文字节定义：
 | 字节序号 | 字段名称 | 取值与说明 |
 | :--- | :--- | :--- |
-| **Byte 0** | **电池 1 异常状态** | `0x00`: 正常<br>`0x01`: **电池 1 CAN 通信掉线（动力仍供电，请小脑接管）**<br>`0x02`: **电池 1 物理拔出（该路已切断）** |
-| **Byte 1** | **电池 2 异常状态** | `0x00`: 正常<br>`0x01`: **电池 2 CAN 通信掉线（动力仍供电，请小脑接管）**<br>`0x02`: **电池 2 物理拔出（该路已切断）** |
+| **Byte 0** | **电池 1 异常状态** | `0x00`: 正常<br>`0x01`: **电池 1 CAN 通信掉线（已处于放电态时保持本地路径）**<br>`0x02`: **电池 1 物理拔出（该路已切断）**<br>`0x03`: **BMS 明确禁止放电（该路已切断）**<br>`0x04`: **BMS 放电状态未知或无效（该路已切断）** |
+| **Byte 1** | **电池 2 异常状态** | `0x00`: 正常<br>`0x01`: **电池 2 CAN 通信掉线（已处于放电态时保持本地路径）**<br>`0x02`: **电池 2 物理拔出（该路已切断）**<br>`0x03`: **BMS 明确禁止放电（该路已切断）**<br>`0x04`: **BMS 放电状态未知或无效（该路已切断）** |
 | **Byte 2 ~ Byte 7** | 保留 | 填充 `0x00` |
 
 ---
@@ -128,18 +128,18 @@ flowchart TD
   #define FDCAN_BATTERY_ALARM_REPORT_ID        0x04400000U
   #define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 50U
   ```
-- 声明发送函数：`void FDCAN_SendBatteryAlarmReportToRk(void);`
+- 声明发送函数：`HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);`
 
 #### [MODIFY] [`fdcan.c`](file:///home/yq/ghf/workspace/D-Y/Core/Src/fdcan.c)
 - 实现 [`FDCAN_SendBatteryAlarmReportToRk()`](file:///home/yq/ghf/workspace/D-Y/Core/Src/fdcan.c)：
   ```c
-  static void FDCAN_SendBatteryAlarmReportToRk(void)
+  HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
   {
     uint8_t alarmData[8] = {0U};
     alarmData[0] = Power_GetBattery1AlarmStatus();
     alarmData[1] = Power_GetBattery2AlarmStatus();
 
-    (void)FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
+    return FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
   }
   ```
 - 在 [`FDCAN_BatteryCanTask()`](file:///home/yq/ghf/workspace/D-Y/Core/Src/fdcan.c#L359-L394) 中判断：若电池 1 或电池 2 处于掉线或拔出状态，则每 50ms 持续向小脑广播告警帧。

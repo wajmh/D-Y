@@ -82,9 +82,11 @@ extern "C" {
 /* 电池物理在线判定电压阈值，低于该值判定为电池拔出，高于等于该值判定为物理在线 (V)，暂定 60V */
 #define BATTERY_PHYSICAL_PRESENT_VOLTAGE   60.0f
 /* 电池异常报警状态定义 */
-#define BATTERY_ALARM_STATUS_NORMAL        0x00U /* 正常在线 */
-#define BATTERY_ALARM_STATUS_CAN_COMM_LOST 0x01U /* CAN 通信掉线，物理在线 (动力仍供电) */
-#define BATTERY_ALARM_STATUS_REMOVED       0x02U /* 电池物理拔出 / 无电压 */
+#define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常在线 */
+#define BATTERY_ALARM_STATUS_CAN_COMM_LOST           0x01U /* CAN 通信掉线；已处于放电态时保持本地路径 */
+#define BATTERY_ALARM_STATUS_REMOVED                 0x02U /* 电池物理拔出 / 无电压 */
+#define BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE  0x03U /* BMS 明确禁止放电，对应本地放电 MOS 和回充 MOS 已关闭 */
+#define BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN       0x04U /* BMS 放电 MOS 状态未知 / 无效，对应本地路径已关闭 */
 /* USER CODE END Private defines */
 
 void MX_GPIO_Init(void);

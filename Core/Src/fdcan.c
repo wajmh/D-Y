@@ -56,6 +56,7 @@ volatile uint32_t battery1_can_rx_count = 0U;
 volatile uint32_t battery1_can_status_last_rx_tick = 0U;
 volatile uint8_t battery1_can_charge_mos_state = 0U;
 volatile uint8_t battery1_can_discharge_mos_state = 0U;
+volatile BmsDischargeMosState_t battery1_bms_discharge_state = BMS_DISCHARGE_MOS_UNKNOWN;
 volatile uint32_t battery1_can_mos_rx_id = 0U;
 volatile uint32_t battery1_can_mos_rx_count = 0U;
 volatile uint32_t battery1_can_mos_last_rx_tick = 0U;
@@ -66,6 +67,7 @@ volatile uint32_t battery2_can_rx_count = 0U;
 volatile uint32_t battery2_can_status_last_rx_tick = 0U;
 volatile uint8_t battery2_can_charge_mos_state = 0U;
 volatile uint8_t battery2_can_discharge_mos_state = 0U;
+volatile BmsDischargeMosState_t battery2_bms_discharge_state = BMS_DISCHARGE_MOS_UNKNOWN;
 volatile uint32_t battery2_can_mos_rx_id = 0U;
 volatile uint32_t battery2_can_mos_rx_count = 0U;
 volatile uint32_t battery2_can_mos_last_rx_tick = 0U;
@@ -150,14 +152,14 @@ static void FDCAN_SendEmergencyStopReportToRk(void)
   (void)FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
 }
 
-void FDCAN_SendBatteryAlarmReportToRk(void)
+HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
 {
   uint8_t alarmData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
 
   alarmData[0] = Power_GetBattery1AlarmStatus();
   alarmData[1] = Power_GetBattery2AlarmStatus();
 
-  (void)FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
+  return FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
 }
 
 static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
@@ -266,12 +268,28 @@ static void FDCAN_ParseBatteryStatus(uint8_t batteryIndex, uint32_t rxId, const 
 static void FDCAN_ParseBatteryMosStatus(uint8_t batteryIndex, uint32_t rxId, const uint8_t rxData[])
 {
   uint8_t chargeMosState = (rxData[0] != 0U) ? 1U : 0U;
-  uint8_t dischargeMosState = (rxData[1] != 0U) ? 1U : 0U;
+  uint8_t dischargeMosByte = rxData[1];
+  uint8_t dischargeMosState = (dischargeMosByte == 0x01U) ? 1U : 0U;
+  BmsDischargeMosState_t bmsDischargeState;
+
+  if (dischargeMosByte == 0x01U)
+  {
+    bmsDischargeState = BMS_DISCHARGE_MOS_ALLOWED;
+  }
+  else if (dischargeMosByte == 0x00U)
+  {
+    bmsDischargeState = BMS_DISCHARGE_MOS_PROHIBITED;
+  }
+  else
+  {
+    bmsDischargeState = BMS_DISCHARGE_MOS_UNKNOWN;
+  }
 
   if (batteryIndex == 1U)
   {
     battery1_can_charge_mos_state = chargeMosState;
     battery1_can_discharge_mos_state = dischargeMosState;
+    battery1_bms_discharge_state = bmsDischargeState;
     battery1_can_mos_rx_id = rxId;
     FDCAN_IncrementDebugCounter(&battery1_can_mos_rx_count);
     battery1_can_mos_last_rx_tick = HAL_GetTick();
@@ -280,6 +298,7 @@ static void FDCAN_ParseBatteryMosStatus(uint8_t batteryIndex, uint32_t rxId, con
   {
     battery2_can_charge_mos_state = chargeMosState;
     battery2_can_discharge_mos_state = dischargeMosState;
+    battery2_bms_discharge_state = bmsDischargeState;
     battery2_can_mos_rx_id = rxId;
     FDCAN_IncrementDebugCounter(&battery2_can_mos_rx_count);
     battery2_can_mos_last_rx_tick = HAL_GetTick();
@@ -391,12 +410,55 @@ void FDCAN_BatteryCanTask(void)
     FDCAN_SendEmergencyStopReportToRk();
   }
 
-  if (((Power_GetBattery1AlarmStatus() != BATTERY_ALARM_STATUS_NORMAL) ||
-       (Power_GetBattery2AlarmStatus() != BATTERY_ALARM_STATUS_NORMAL)) &&
-      ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS))
+  static uint8_t prevBat1Alarm = BATTERY_ALARM_STATUS_NORMAL;
+  static uint8_t prevBat2Alarm = BATTERY_ALARM_STATUS_NORMAL;
+  static uint8_t alarmClearBurstRemaining = 0U;
+
+  uint8_t curBat1Alarm = Power_GetBattery1AlarmStatus();
+  uint8_t curBat2Alarm = Power_GetBattery2AlarmStatus();
+  uint8_t hasAlarm = ((curBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
+                      (curBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
+
+  if ((hasAlarm == 0U) &&
+      ((prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
+       (prevBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)))
   {
-    batteryAlarmReportLastTxTick = now;
-    FDCAN_SendBatteryAlarmReportToRk();
+    alarmClearBurstRemaining = FDCAN_BATTERY_ALARM_CLEAR_BURST_COUNT;
+  }
+
+  prevBat1Alarm = curBat1Alarm;
+  prevBat2Alarm = curBat2Alarm;
+
+  if (hasAlarm != 0U)
+  {
+    if ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS)
+    {
+      if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
+      {
+        batteryAlarmReportLastTxTick = now;
+      }
+    }
+  }
+  else if (alarmClearBurstRemaining > 0U)
+  {
+    if ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS)
+    {
+      if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
+      {
+        batteryAlarmReportLastTxTick = now;
+        alarmClearBurstRemaining--;
+      }
+    }
+  }
+  else
+  {
+    if ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS)
+    {
+      if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
+      {
+        batteryAlarmReportLastTxTick = now;
+      }
+    }
   }
 
   if ((now - currentReportLastTxTick) >= FDCAN_CURRENT_REPORT_PERIOD_MS)
