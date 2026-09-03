@@ -158,6 +158,10 @@ HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
 
   alarmData[0] = Power_GetBattery1AlarmStatus();
   alarmData[1] = Power_GetBattery2AlarmStatus();
+  alarmData[2] = bat1_discharge_mos_state;
+  alarmData[3] = bat1_recharge_mos_state;
+  alarmData[4] = bat2_discharge_mos_state;
+  alarmData[5] = bat2_recharge_mos_state;
 
   return FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
 }
@@ -412,6 +416,10 @@ void FDCAN_BatteryCanTask(void)
 
   static uint8_t prevBat1Alarm = BATTERY_ALARM_STATUS_NORMAL;
   static uint8_t prevBat2Alarm = BATTERY_ALARM_STATUS_NORMAL;
+  static uint8_t prevBat1DischargeMos = 0U;
+  static uint8_t prevBat1RechargeMos = 0U;
+  static uint8_t prevBat2DischargeMos = 0U;
+  static uint8_t prevBat2RechargeMos = 0U;
   static uint8_t alarmClearBurstRemaining = 0U;
 
   uint8_t curBat1Alarm = Power_GetBattery1AlarmStatus();
@@ -419,6 +427,13 @@ void FDCAN_BatteryCanTask(void)
   uint8_t hasAlarm = ((curBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
                       (curBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
 
+  /* 监测本地 MOS 状态是否发生跳变 */
+  uint8_t mosChanged = ((bat1_discharge_mos_state != prevBat1DischargeMos) ||
+                        (bat1_recharge_mos_state != prevBat1RechargeMos) ||
+                        (bat2_discharge_mos_state != prevBat2DischargeMos) ||
+                        (bat2_recharge_mos_state != prevBat2RechargeMos)) ? 1U : 0U;
+
+  /* 检测是否从有报警恢复到全正常 */
   if ((hasAlarm == 0U) &&
       ((prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
        (prevBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)))
@@ -428,6 +443,10 @@ void FDCAN_BatteryCanTask(void)
 
   prevBat1Alarm = curBat1Alarm;
   prevBat2Alarm = curBat2Alarm;
+  prevBat1DischargeMos = bat1_discharge_mos_state;
+  prevBat1RechargeMos = bat1_recharge_mos_state;
+  prevBat2DischargeMos = bat2_discharge_mos_state;
+  prevBat2RechargeMos = bat2_recharge_mos_state;
 
   if (hasAlarm != 0U)
   {
@@ -448,6 +467,14 @@ void FDCAN_BatteryCanTask(void)
         batteryAlarmReportLastTxTick = now;
         alarmClearBurstRemaining--;
       }
+    }
+  }
+  else if (mosChanged != 0U)
+  {
+    /* MOS 状态发生开/关动作时，立即触发发送，无需等待 100ms 计时 */
+    if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
+    {
+      batteryAlarmReportLastTxTick = now;
     }
   }
   else
