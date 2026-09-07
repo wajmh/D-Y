@@ -80,7 +80,7 @@ extern "C" {
 #define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
 /* 电流占比异常持续时间，单位 ms */
 /* 电池物理在线判定电压阈值，低于该值判定为电池拔出，高于等于该值判定为物理在线 (V)，暂定 60V */
-#define BATTERY_PHYSICAL_PRESENT_VOLTAGE   60.0f
+#define BATTERY_PHYSICAL_PRESENT_VOLTAGE   50.0f
 /* 电池异常报警状态定义 */
 #define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常在线 */
 #define BATTERY_ALARM_STATUS_CAN_COMM_LOST           0x01U /* CAN 通信掉线；已处于放电态时保持本地路径 */
