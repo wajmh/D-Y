@@ -74,6 +74,10 @@ extern "C" {
 #define POWER_BATTERY_CAN_TIMEOUT_MS       2000U
 /* 双电池回充 MOS 切换阈值，两个电池压差超过该值时只开高电压电池回充 */
 #define POWER_RECHARGE_BALANCE_DIFF        0.10f
+/* 充电模式下双电池压差在该阈值内时双开充电 MOS */
+#define POWER_CHARGE_BALANCE_DIFF          0.10f
+/* 充电模式下向 CAN2 发送所选低压电池回复帧的周期 (ms) */
+#define POWER_CHARGE_REPLY_PERIOD_MS       200U
 /* 关低压回充 MOS 后，等待控制脚读回 OFF 的超时时间 */
 #define POWER_RECHARGE_SWITCH_TIMEOUT_MS   5U
 /* 双回充 MOS 打开后，某路电流占总电流低于该比例，认为疑似未放电 */
@@ -106,8 +110,11 @@ extern volatile uint8_t back_emf_absorb_state;
 void Power_UpdateGpioDebugStates(void);
 void Power_AllMosOff(void);
 HAL_StatusTypeDef Power_EnterDischargeMode(void);
+void Power_ModeTask(void);
 void Power_DischargeModeTask(void);
 void Power_ExitDischargeMode(void);
+HAL_StatusTypeDef Power_EnterChargeMode(void);
+void Power_ExitChargeMode(void);
 GPIO_PinState Power_ReadEmergencyStop(void);
 uint8_t Power_IsEmergencyStopActive(void);
 uint8_t Power_GetBattery1AlarmStatus(void);

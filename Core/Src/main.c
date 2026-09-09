@@ -123,7 +123,7 @@ int main(void)
     ADC2_UpdateBatteryVoltages();//电池电压的更新
     FDCAN_BatteryCanTask();
     Power_UpdateGpioDebugStates();
-    Power_DischargeModeTask();
+    Power_ModeTask();
   }
   /* USER CODE END 3 */
 }

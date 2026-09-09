@@ -23,9 +23,13 @@
 /* USER CODE BEGIN 0 */
 #include "adc.h"
 #include "gpio.h"
+#include <string.h>
 
 #define FDCAN_BATTERY_STATUS_ID_BASE 0x04028000U
 #define FDCAN_BATTERY_STATUS_ID_MASK 0x1FFFFF00U
+#define FDCAN_BATTERY_CHARGE_REPLY_STATUS_ID_BASE 0x04028000U
+#define FDCAN_BATTERY_CHARGE_REPLY_INFO_ID_BASE   0x04008000U
+#define FDCAN_BATTERY_CHARGE_REPLY_TEMP_ID_BASE   0x04088000U
 #define FDCAN_BATTERY_MOS_ID_BASE    0x04068000U
 #define FDCAN_BATTERY_MOS_ID_MASK    0x1FFFFF00U
 #define FDCAN_BATTERY_INFO_ID_BASE   0x04038000U
@@ -47,6 +51,18 @@ static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t currentReportLastTxTick = 0U;
 static uint32_t estopReportLastTxTick = 0U;
 static uint32_t batteryAlarmReportLastTxTick = 0U;
+static uint8_t rkChargeModeRequest = 0U;
+static uint8_t chargeModeActive = 0U;
+
+typedef struct
+{
+  uint8_t valid;
+  uint32_t id;
+  uint32_t dataLength;
+  uint8_t data[8];
+} FDCAN_ChargeReplyFrame_t;
+
+static FDCAN_ChargeReplyFrame_t batteryChargeReplyFrames[2][3];
 volatile uint32_t battery_can_forward_count = 0U;
 volatile uint32_t battery_can_forward_drop_count = 0U;
 volatile float battery1_can_sum_voltage = 0.0f;
@@ -162,8 +178,35 @@ HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
   alarmData[3] = bat1_recharge_mos_state;
   alarmData[4] = bat2_discharge_mos_state;
   alarmData[5] = bat2_recharge_mos_state;
+  alarmData[6] = bat1_charge_mos_state;
+  alarmData[7] = bat2_charge_mos_state;
 
   return FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
+}
+
+static void FDCAN_SendChargeModeStatusToRk(uint8_t status)
+{
+  FDCAN_TxHeaderTypeDef txHeader;
+  uint8_t statusData[1];
+
+  statusData[0] = status;
+
+  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
+  {
+    return;
+  }
+
+  txHeader.Identifier = FDCAN_RK_CHARGE_MODE_STATUS_ID;
+  txHeader.IdType = FDCAN_EXTENDED_ID;
+  txHeader.TxFrameType = FDCAN_DATA_FRAME;
+  txHeader.DataLength = FDCAN_DLC_BYTES_1;
+  txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  txHeader.BitRateSwitch = FDCAN_BRS_OFF;
+  txHeader.FDFormat = FDCAN_CLASSIC_CAN;
+  txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+  txHeader.MessageMarker = 0U;
+
+  (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, statusData);
 }
 
 static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
@@ -174,7 +217,9 @@ static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
     FDCAN_BATTERY_MOS_ID_BASE,
     FDCAN_BATTERY_INFO_ID_BASE,
     FDCAN_BATTERY_FAULT_ID_BASE,
-    FDCAN_BATTERY_TEMP_ID_BASE
+    FDCAN_BATTERY_TEMP_ID_BASE,
+    FDCAN_BATTERY_CHARGE_REPLY_INFO_ID_BASE,
+    FDCAN_BATTERY_CHARGE_REPLY_TEMP_ID_BASE
   };
   FDCAN_FilterTypeDef filterConfig;
   uint32_t filterIndex;
@@ -194,6 +239,83 @@ static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
       Error_Handler();
     }
   }
+
+  if (hfdcan->Instance == FDCAN2)
+  {
+    filterConfig.FilterIndex = filterIndex;
+    filterConfig.FilterID1 = FDCAN_CHARGE_MODE_CMD_ID;
+    filterConfig.FilterID2 = 0x1FFFFFFFU;
+
+    if (HAL_FDCAN_ConfigFilter(hfdcan, &filterConfig) != HAL_OK)
+    {
+      Error_Handler();
+    }
+  }
+}
+
+static void FDCAN_ConfigRkRxFilters(void)
+{
+  FDCAN_FilterTypeDef filterConfig;
+
+  filterConfig.IdType = FDCAN_EXTENDED_ID;
+  filterConfig.FilterIndex = 0U;
+  filterConfig.FilterType = FDCAN_FILTER_MASK;
+  filterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+  filterConfig.FilterID1 = FDCAN_RK_CHARGE_MODE_CMD_ID;
+  filterConfig.FilterID2 = 0x1FFFFFFFU;
+
+  if (HAL_FDCAN_ConfigFilter(&hfdcan3, &filterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+static uint8_t FDCAN_GetChargeReplyFrameSlot(uint32_t rxId, uint8_t *slot)
+{
+  uint32_t idBase = rxId & FDCAN_BATTERY_ID_MASK;
+
+  if (idBase == FDCAN_BATTERY_CHARGE_REPLY_STATUS_ID_BASE)
+  {
+    *slot = 0U;
+    return 1U;
+  }
+
+  if (idBase == FDCAN_BATTERY_CHARGE_REPLY_INFO_ID_BASE)
+  {
+    *slot = 1U;
+    return 1U;
+  }
+
+  if (idBase == FDCAN_BATTERY_CHARGE_REPLY_TEMP_ID_BASE)
+  {
+    *slot = 2U;
+    return 1U;
+  }
+
+  return 0U;
+}
+
+static void FDCAN_CacheChargeReplyFrame(uint8_t batteryIndex,
+                                        const FDCAN_RxHeaderTypeDef *rxHeader,
+                                        const uint8_t rxData[])
+{
+  FDCAN_ChargeReplyFrame_t *frame;
+  uint8_t slot;
+
+  if ((batteryIndex < 1U) ||
+      (batteryIndex > 2U) ||
+      (rxHeader->IdType != FDCAN_EXTENDED_ID) ||
+      (rxHeader->RxFrameType != FDCAN_DATA_FRAME) ||
+      (FDCAN_GetChargeReplyFrameSlot(rxHeader->Identifier, &slot) == 0U))
+  {
+    return;
+  }
+
+  frame = &batteryChargeReplyFrames[batteryIndex - 1U][slot];
+  frame->valid = 1U;
+  frame->id = rxHeader->Identifier;
+  frame->dataLength = rxHeader->DataLength;
+  (void)memcpy(frame->data, rxData, sizeof(frame->data));
 }
 
 static uint8_t FDCAN_IsBatteryForwardFrame(uint32_t rxId)
@@ -321,6 +443,22 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
       return;
     }
 
+    if ((hfdcan->Instance == FDCAN2) &&
+        (rxHeader.IdType == FDCAN_EXTENDED_ID) &&
+        (rxHeader.Identifier == FDCAN_CHARGE_MODE_CMD_ID))
+    {
+      if ((rkChargeModeRequest != 0U) && (chargeModeActive == 0U))
+      {
+        if (Power_EnterChargeMode() == HAL_OK)
+        {
+          chargeModeActive = 1U;
+          FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_ENTER);
+        }
+      }
+      continue;
+    }
+
+    FDCAN_CacheChargeReplyFrame(batteryIndex, &rxHeader, rxData);
     FDCAN_ForwardBatteryFrameToRk(batteryIndex, &rxHeader, rxData);
 
     if ((rxHeader.IdType == FDCAN_EXTENDED_ID) &&
@@ -336,6 +474,106 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
       FDCAN_ParseBatteryMosStatus(batteryIndex, rxHeader.Identifier, rxData);
     }
   }
+}
+
+static void FDCAN_HandleRkChargeModeCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t rxData[])
+{
+  if ((rxHeader->IdType != FDCAN_EXTENDED_ID) ||
+      (rxHeader->RxFrameType != FDCAN_DATA_FRAME) ||
+      (rxHeader->Identifier != FDCAN_RK_CHARGE_MODE_CMD_ID) ||
+      (rxHeader->DataLength < FDCAN_DLC_BYTES_1))
+  {
+    return;
+  }
+
+  if (rxData[0] == FDCAN_CHARGE_MODE_ENTER)
+  {
+    rkChargeModeRequest = 1U;
+    return;
+  }
+
+  if (rxData[0] == FDCAN_CHARGE_MODE_EXIT)
+  {
+    rkChargeModeRequest = 0U;
+    chargeModeActive = 0U;
+    Power_ExitChargeMode();
+    FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_EXIT);
+  }
+}
+
+static void FDCAN_PollRkRx(void)
+{
+  FDCAN_RxHeaderTypeDef rxHeader;
+  uint8_t rxData[8];
+
+  while (HAL_FDCAN_GetRxFifoFillLevel(&hfdcan3, FDCAN_RX_FIFO0) > 0U)
+  {
+    if (HAL_FDCAN_GetRxMessage(&hfdcan3, FDCAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
+    {
+      return;
+    }
+
+    FDCAN_HandleRkChargeModeCommand(&rxHeader, rxData);
+  }
+}
+
+HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex)
+{
+  FDCAN_TxHeaderTypeDef txHeader;
+  HAL_StatusTypeDef result = HAL_OK;
+  uint8_t sentFrameCount = 0U;
+  uint8_t slot;
+
+  if ((batteryIndex < 1U) || (batteryIndex > 2U))
+  {
+    return HAL_ERROR;
+  }
+
+  for (slot = 0U; slot < 3U; slot++)
+  {
+    FDCAN_ChargeReplyFrame_t *frame = &batteryChargeReplyFrames[batteryIndex - 1U][slot];
+
+    if (frame->valid == 0U)
+    {
+      continue;
+    }
+
+    if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan2) == 0U)
+    {
+      result = HAL_BUSY;
+      break;
+    }
+
+    txHeader.Identifier = (frame->id & 0x00FFFFFFU) | 0x05000000U;
+    txHeader.IdType = FDCAN_EXTENDED_ID;
+    txHeader.TxFrameType = FDCAN_DATA_FRAME;
+    txHeader.DataLength = frame->dataLength;
+    txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    txHeader.BitRateSwitch = FDCAN_BRS_OFF;
+    txHeader.FDFormat = FDCAN_CLASSIC_CAN;
+    txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    txHeader.MessageMarker = batteryIndex;
+
+    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, frame->data) == HAL_OK)
+    {
+      sentFrameCount++;
+    }
+    else
+    {
+      result = HAL_ERROR;
+    }
+  }
+
+  if (sentFrameCount != 0U)
+  {
+    result = HAL_OK;
+  }
+  else
+  {
+    result = HAL_ERROR;
+  }
+
+  return result;
 }
 
 static HAL_StatusTypeDef FDCAN_SendBatteryWakeFrame(FDCAN_HandleTypeDef *hfdcan, uint8_t marker)
@@ -370,6 +608,7 @@ void FDCAN_BatteryCanStart(void)
 
   FDCAN_ConfigBatteryRxFilters(&hfdcan1);
   FDCAN_ConfigBatteryRxFilters(&hfdcan2);
+  FDCAN_ConfigRkRxFilters();
 
   if (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)
   {
@@ -404,6 +643,7 @@ void FDCAN_BatteryCanTask(void)
 
   now = HAL_GetTick();
 
+  FDCAN_PollRkRx();
   FDCAN_PollBatteryRx(&hfdcan1, 1U);
   FDCAN_PollBatteryRx(&hfdcan2, 2U);
 
@@ -418,8 +658,10 @@ void FDCAN_BatteryCanTask(void)
   static uint8_t prevBat2Alarm = BATTERY_ALARM_STATUS_NORMAL;
   static uint8_t prevBat1DischargeMos = 0U;
   static uint8_t prevBat1RechargeMos = 0U;
+  static uint8_t prevBat1ChargeMos = 0U;
   static uint8_t prevBat2DischargeMos = 0U;
   static uint8_t prevBat2RechargeMos = 0U;
+  static uint8_t prevBat2ChargeMos = 0U;
   static uint8_t alarmClearBurstRemaining = 0U;
 
   uint8_t curBat1Alarm = Power_GetBattery1AlarmStatus();
@@ -427,11 +669,13 @@ void FDCAN_BatteryCanTask(void)
   uint8_t hasAlarm = ((curBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
                       (curBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
 
-  /* 监测本地 MOS 状态是否发生跳变 */
+  /* 监测本地 MOS 状态是否发生跳变（放电、回充、充电 MOS） */
   uint8_t mosChanged = ((bat1_discharge_mos_state != prevBat1DischargeMos) ||
                         (bat1_recharge_mos_state != prevBat1RechargeMos) ||
+                        (bat1_charge_mos_state != prevBat1ChargeMos) ||
                         (bat2_discharge_mos_state != prevBat2DischargeMos) ||
-                        (bat2_recharge_mos_state != prevBat2RechargeMos)) ? 1U : 0U;
+                        (bat2_recharge_mos_state != prevBat2RechargeMos) ||
+                        (bat2_charge_mos_state != prevBat2ChargeMos)) ? 1U : 0U;
 
   /* 检测是否从有报警恢复到全正常 */
   if ((hasAlarm == 0U) &&
@@ -445,8 +689,10 @@ void FDCAN_BatteryCanTask(void)
   prevBat2Alarm = curBat2Alarm;
   prevBat1DischargeMos = bat1_discharge_mos_state;
   prevBat1RechargeMos = bat1_recharge_mos_state;
+  prevBat1ChargeMos = bat1_charge_mos_state;
   prevBat2DischargeMos = bat2_discharge_mos_state;
   prevBat2RechargeMos = bat2_recharge_mos_state;
+  prevBat2ChargeMos = bat2_charge_mos_state;
 
   if (hasAlarm != 0U)
   {
@@ -537,7 +783,7 @@ void MX_FDCAN1_Init(void)
   hfdcan1.Init.DataTimeSeg1 = 1;
   hfdcan1.Init.DataTimeSeg2 = 1;
   hfdcan1.Init.StdFiltersNbr = 1;
-  hfdcan1.Init.ExtFiltersNbr = 5;
+  hfdcan1.Init.ExtFiltersNbr = 7;
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
   {
@@ -575,7 +821,7 @@ void MX_FDCAN2_Init(void)
   hfdcan2.Init.DataTimeSeg1 = 1;
   hfdcan2.Init.DataTimeSeg2 = 1;
   hfdcan2.Init.StdFiltersNbr = 1;
-  hfdcan2.Init.ExtFiltersNbr = 5;
+  hfdcan2.Init.ExtFiltersNbr = 8;
   hfdcan2.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan2) != HAL_OK)
   {

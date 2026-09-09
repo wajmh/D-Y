@@ -153,7 +153,9 @@ flowchart TD
 | **各桥臂电流上报** | `0x04100000U` | 200ms | 8 字节 (Little-Endian) | Byte 0-1: Leg 1 电流 (单位 0.01A)<br>Byte 2-3: Leg 2 电流 (单位 0.01A)<br>Byte 4-5: Leg 3 电流 (单位 0.01A)<br>Byte 6-7: Leg 4 电流 (单位 0.01A) |
 | **外设电流上报** | `0x04200000U` | 200ms | 8 字节 (Little-Endian) | Byte 0-1: 外设放电电流 (单位 0.01A)<br>Byte 2-7: 保留 (0x00) |
 | **急停报警帧** | `0x04300000U` | 50ms (急停时) | 8 字节 | Byte 0: 0x01 (急停触发状态) |
-| **电池与MOS状态上报** | `0x04400000U` | 50ms (故障)<br>100ms (心跳)<br>事件跳变即时 | 8 字节 | Byte 0: BAT1 状态 (0x00~0x04)<br>Byte 1: BAT2 状态 (0x00~0x04)<br>Byte 2: BAT1 主放电 MOS (0/1)<br>Byte 3: BAT1 回充 MOS (0/1)<br>Byte 4: BAT2 主放电 MOS (0/1)<br>Byte 5: BAT2 回充 MOS (0/1)<br>Byte 6-7: 保留 (0x00) |
+| **电池与MOS状态上报** | `0x04400000U` | 200ms (心跳)<br>事件跳变即时 | 8 字节 | Byte 0: BAT1 状态 (0x00~0x04)<br>Byte 1: BAT2 状态 (0x00~0x04)<br>Byte 2: BAT1 主放电 MOS (0/1)<br>Byte 3: BAT1 回充 MOS (0/1)<br>Byte 4: BAT2 主放电 MOS (0/1)<br>Byte 5: BAT2 回充 MOS (0/1)<br>Byte 6: BAT1 充电 MOS (0/1)<br>Byte 7: BAT2 充电 MOS (0/1) |
+| **小脑充电模式指令** | `0x04500000U` | 事件下发 (小脑->STM32) | 1 字节 | Byte 0: 0x01 (请求进入充电模式), 0x00 (请求退出充电模式) |
+| **充电模式状态反馈** | `0x04500001U` | 事件回复 (STM32->小脑) | 1 字节 | Byte 0: 0x01 (已进入充电模式), 0x00 (已退出充电模式) |
 
 ---
 

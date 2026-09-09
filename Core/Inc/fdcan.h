@@ -89,9 +89,16 @@ void MX_FDCAN3_Init(void);
 #define FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS  200U
 #define FDCAN_BATTERY_ALARM_CLEAR_BURST_COUNT    10U
 
+#define FDCAN_CHARGE_MODE_CMD_ID                 0x0500FF80U
+#define FDCAN_RK_CHARGE_MODE_CMD_ID              0x04500000U
+#define FDCAN_RK_CHARGE_MODE_STATUS_ID           0x04500001U
+#define FDCAN_CHARGE_MODE_EXIT                   0x00U
+#define FDCAN_CHARGE_MODE_ENTER                  0x01U
+
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
+HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex);
 
 /* USER CODE END Prototypes */
 
