@@ -79,6 +79,11 @@ extern volatile BmsDischargeMosState_t battery2_bms_discharge_state;
 extern volatile uint32_t battery2_can_mos_rx_id;
 extern volatile uint32_t battery2_can_mos_rx_count;
 extern volatile uint32_t battery2_can_mos_last_rx_tick;
+extern volatile uint32_t charger_can_rx_count;
+extern volatile uint32_t charger_can_rx_id;
+extern volatile uint32_t charger_can_last_rx_tick;
+extern volatile uint8_t rk_charge_mode_request;
+extern volatile uint8_t charge_mode_active;
 
 void MX_FDCAN1_Init(void);
 void MX_FDCAN2_Init(void);

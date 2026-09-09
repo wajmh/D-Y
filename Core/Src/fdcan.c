@@ -51,8 +51,6 @@ static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t currentReportLastTxTick = 0U;
 static uint32_t estopReportLastTxTick = 0U;
 static uint32_t batteryAlarmReportLastTxTick = 0U;
-static uint8_t rkChargeModeRequest = 0U;
-static uint8_t chargeModeActive = 0U;
 
 typedef struct
 {
@@ -87,6 +85,11 @@ volatile BmsDischargeMosState_t battery2_bms_discharge_state = BMS_DISCHARGE_MOS
 volatile uint32_t battery2_can_mos_rx_id = 0U;
 volatile uint32_t battery2_can_mos_rx_count = 0U;
 volatile uint32_t battery2_can_mos_last_rx_tick = 0U;
+volatile uint32_t charger_can_rx_count = 0U;
+volatile uint32_t charger_can_rx_id = 0U;
+volatile uint32_t charger_can_last_rx_tick = 0U;
+volatile uint8_t rk_charge_mode_request = 0U;
+volatile uint8_t charge_mode_active = 0U;
 
 static void FDCAN_IncrementDebugCounter(volatile uint32_t *counter)
 {
@@ -447,11 +450,15 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
         (rxHeader.IdType == FDCAN_EXTENDED_ID) &&
         (rxHeader.Identifier == FDCAN_CHARGE_MODE_CMD_ID))
     {
-      if ((rkChargeModeRequest != 0U) && (chargeModeActive == 0U))
+      charger_can_rx_id = rxHeader.Identifier;
+      FDCAN_IncrementDebugCounter(&charger_can_rx_count);
+      charger_can_last_rx_tick = HAL_GetTick();
+
+      if ((rk_charge_mode_request != 0U) && (charge_mode_active == 0U))
       {
         if (Power_EnterChargeMode() == HAL_OK)
         {
-          chargeModeActive = 1U;
+          charge_mode_active = 1U;
           FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_ENTER);
         }
       }
@@ -488,14 +495,14 @@ static void FDCAN_HandleRkChargeModeCommand(const FDCAN_RxHeaderTypeDef *rxHeade
 
   if (rxData[0] == FDCAN_CHARGE_MODE_ENTER)
   {
-    rkChargeModeRequest = 1U;
+    rk_charge_mode_request = 1U;
     return;
   }
 
   if (rxData[0] == FDCAN_CHARGE_MODE_EXIT)
   {
-    rkChargeModeRequest = 0U;
-    chargeModeActive = 0U;
+    rk_charge_mode_request = 0U;
+    charge_mode_active = 0U;
     Power_ExitChargeMode();
     FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_EXIT);
   }
