@@ -88,6 +88,7 @@ volatile uint32_t battery2_can_mos_last_rx_tick = 0U;
 volatile uint32_t charger_can_rx_count = 0U;
 volatile uint32_t charger_can_rx_id = 0U;
 volatile uint32_t charger_can_last_rx_tick = 0U;
+volatile uint32_t charger_can_rx_interval_ms = 0U;
 volatile uint8_t rk_charge_mode_request = 0U;
 volatile uint8_t charge_mode_active = 0U;
 
@@ -450,9 +451,14 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
         (rxHeader.IdType == FDCAN_EXTENDED_ID) &&
         (rxHeader.Identifier == FDCAN_CHARGE_MODE_CMD_ID))
     {
+      uint32_t now = HAL_GetTick();
+      if (charger_can_last_rx_tick != 0U)
+      {
+        charger_can_rx_interval_ms = now - charger_can_last_rx_tick;
+      }
       charger_can_rx_id = rxHeader.Identifier;
       FDCAN_IncrementDebugCounter(&charger_can_rx_count);
-      charger_can_last_rx_tick = HAL_GetTick();
+      charger_can_last_rx_tick = now;
 
       if ((rk_charge_mode_request != 0U) && (charge_mode_active == 0U))
       {
@@ -653,6 +659,20 @@ void FDCAN_BatteryCanTask(void)
   FDCAN_PollRkRx();
   FDCAN_PollBatteryRx(&hfdcan1, 1U);
   FDCAN_PollBatteryRx(&hfdcan2, 2U);
+
+  /* 充电桩通信超时监测：在充电激活状态下，若超过 FDCAN_CHARGER_CAN_TIMEOUT_MS（当前3000ms）未收到充电桩握手帧（拔枪或充电机断电），自动退出充电模式 */
+  now = HAL_GetTick();  /* 在超时判断前刷新 now，消除与 PollBatteryRx 内部更新 charger_can_last_rx_tick 的时序下溢 */
+  if (charge_mode_active != 0U)
+  {
+    uint32_t elapsed = now - charger_can_last_rx_tick;
+    if ((elapsed < 0x80000000U) && (elapsed >= FDCAN_CHARGER_CAN_TIMEOUT_MS))
+    {
+      rk_charge_mode_request = 0U;
+      charge_mode_active = 0U;
+      Power_ExitChargeMode();
+      FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_EXIT);
+    }
+  }
 
   if ((Power_IsEmergencyStopActive() != 0U) &&
       ((now - estopReportLastTxTick) >= FDCAN_ESTOP_REPORT_PERIOD_MS))

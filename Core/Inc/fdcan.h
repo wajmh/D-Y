@@ -82,6 +82,7 @@ extern volatile uint32_t battery2_can_mos_last_rx_tick;
 extern volatile uint32_t charger_can_rx_count;
 extern volatile uint32_t charger_can_rx_id;
 extern volatile uint32_t charger_can_last_rx_tick;
+extern volatile uint32_t charger_can_rx_interval_ms;
 extern volatile uint8_t rk_charge_mode_request;
 extern volatile uint8_t charge_mode_active;
 
@@ -99,6 +100,7 @@ void MX_FDCAN3_Init(void);
 #define FDCAN_RK_CHARGE_MODE_STATUS_ID           0x04500001U
 #define FDCAN_CHARGE_MODE_EXIT                   0x00U
 #define FDCAN_CHARGE_MODE_ENTER                  0x01U
+#define FDCAN_CHARGER_CAN_TIMEOUT_MS             3000U
 
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);

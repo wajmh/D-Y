@@ -445,16 +445,35 @@ HAL_StatusTypeDef Power_EnterChargeMode(void)
     return HAL_OK;
   }
 
-  /* 切入充电模式前关闭放电相关 MOS */
-  HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  /* 1. 切入充电模式：强制切断回充 MOS 与预放电 MOS，杜绝跨母线倒灌环流并消除预充支路损耗 */
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  battery1Control.state = POWER_BATTERY_STATE_OFF;
-  battery2Control.state = POWER_BATTERY_STATE_OFF;
   powerPreDischargeBatteryIndex = 0U;
+
+  /* 2. 维持在位电池的主放电 MOS 导通，确保 VBUS 持续带电供给 DCDC U52，保障小脑（RK3588）稳定运行不掉电 */
+  if (Power_IsBatteryCanPresent(1U) != 0U)
+  {
+    HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+    battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
+  }
+  else
+  {
+    HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+    battery1Control.state = POWER_BATTERY_STATE_OFF;
+  }
+
+  if (Power_IsBatteryCanPresent(2U) != 0U)
+  {
+    HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+    battery2Control.state = POWER_BATTERY_STATE_DISCHARGE;
+  }
+  else
+  {
+    HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+    battery2Control.state = POWER_BATTERY_STATE_OFF;
+  }
 
   dischargeModeEnabled = 1U;
   powerWorkMode = POWER_WORK_MODE_CHARGE;
@@ -519,6 +538,29 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
 
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+
+  /* 维持在位电池的主放电 MOS 导通以保 VBUS 供电，某路离线则切断其放电 MOS */
+  if (battery1Present != 0U)
+  {
+    HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+    battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
+  }
+  else
+  {
+    HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+    battery1Control.state = POWER_BATTERY_STATE_OFF;
+  }
+
+  if (battery2Present != 0U)
+  {
+    HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+    battery2Control.state = POWER_BATTERY_STATE_DISCHARGE;
+  }
+  else
+  {
+    HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+    battery2Control.state = POWER_BATTERY_STATE_OFF;
+  }
 
   if ((battery1Present != 0U) && (battery2Present != 0U))
   {
