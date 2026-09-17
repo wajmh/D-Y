@@ -568,7 +568,6 @@ void FDCAN_BatteryCanTask(void)
     }
 
     static uint8_t prevBat1Alarm = BATTERY_ALARM_STATUS_NORMAL;
-    static uint8_t prevBat2Alarm = BATTERY_ALARM_STATUS_NORMAL;
     static uint8_t prevBat1DischargeMos = 0U;
     static uint8_t prevBat1RechargeMos = 0U;
     static uint8_t prevBat2DischargeMos = 0U;
@@ -576,9 +575,8 @@ void FDCAN_BatteryCanTask(void)
     static uint8_t alarmClearBurstRemaining = 0U;
 
     uint8_t curBat1Alarm = Power_GetBattery1AlarmStatus();
-    uint8_t curBat2Alarm = Power_GetBattery2AlarmStatus();
-    uint8_t hasAlarm = ((curBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
-                        (curBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
+    /* 单电池版本：整机异常告警仅由电池 1 决定，电池 2 未插属于正常硬件配置 */
+    uint8_t hasAlarm = (curBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ? 1U : 0U;
 
     /* 监测本地 MOS 状态是否发生跳变 */
     uint8_t mosChanged = ((bat1_discharge_mos_state != prevBat1DischargeMos) ||
@@ -587,15 +585,12 @@ void FDCAN_BatteryCanTask(void)
                           (bat2_recharge_mos_state != prevBat2RechargeMos)) ? 1U : 0U;
 
     /* 检测是否从有报警恢复到全正常 */
-    if ((hasAlarm == 0U) &&
-        ((prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
-         (prevBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)))
+    if ((hasAlarm == 0U) && (prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL))
     {
       alarmClearBurstRemaining = FDCAN_BATTERY_ALARM_CLEAR_BURST_COUNT;
     }
 
     prevBat1Alarm = curBat1Alarm;
-    prevBat2Alarm = curBat2Alarm;
     prevBat1DischargeMos = bat1_discharge_mos_state;
     prevBat1RechargeMos = bat1_recharge_mos_state;
     prevBat2DischargeMos = bat2_discharge_mos_state;
@@ -658,10 +653,7 @@ void FDCAN_BatteryCanTask(void)
   {
     (void)FDCAN_SendBatteryWakeFrame(&hfdcan1, 1U);
   }
-  if (fdcan2_busoff_flag == 0U)
-  {
-    (void)FDCAN_SendBatteryWakeFrame(&hfdcan2, 2U);
-  }
+  /* 单电池版本：电池 2 硬件未接入，不向 FDCAN2 发送唤醒帧，避免无 ACK 触发总线错误与 Bus-off */
 }
 /**
  * @brief 确认 FDCAN 外设是否真正退出 Bus-Off
