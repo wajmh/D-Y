@@ -124,6 +124,7 @@ int main(void)
     FDCAN_BatteryCanTask();
     Power_UpdateGpioDebugStates();
     Power_DischargeModeTask();
+    FDCAN_CheckAndRecoverAllBusOff();//Bus-Off 中断触发后的恢复处理
   }
   /* USER CODE END 3 */
 }

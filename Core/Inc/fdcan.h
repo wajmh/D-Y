@@ -93,6 +93,25 @@ void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
 
+/* Bus-Off 自动恢复接口 */
+void FDCAN_CheckAndRecoverAllBusOff(void);
+
+/* Bus-Off 恢复统计（用于调试和遥测，volatile 确保实时性） */
+extern volatile uint32_t fdcan1_busoff_recovery_count;
+extern volatile uint32_t fdcan1_busoff_recovery_fail_count;
+extern volatile uint32_t fdcan2_busoff_recovery_count;
+extern volatile uint32_t fdcan2_busoff_recovery_fail_count;
+extern volatile uint32_t fdcan3_busoff_recovery_count;
+extern volatile uint32_t fdcan3_busoff_recovery_fail_count;
+
+/* Bus-Off 诊断指标（PSR/ECR 快照，用于背景遥测与健康度排查） */
+extern volatile uint32_t fdcan1_last_psr;
+extern volatile uint32_t fdcan1_last_ecr;
+extern volatile uint32_t fdcan2_last_psr;
+extern volatile uint32_t fdcan2_last_ecr;
+extern volatile uint32_t fdcan3_last_psr;
+extern volatile uint32_t fdcan3_last_ecr;
+
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus
@@ -100,4 +119,3 @@ HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
 #endif
 
 #endif /* __FDCAN_H__ */
-
