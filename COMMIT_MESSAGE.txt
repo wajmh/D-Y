@@ -1,214 +1,30 @@
-feat(fdcan): 实现 Bus-Off 中断驱动自动恢复机制
+【测试】feat(fdcan): 增加Bus-Off进入次数统计并通过0x04400000报文上报小脑
 
-## 概述
+## 功能背景
+为了实时监控三路 FDCAN 总线（电池1 FDCAN1、电池2 FDCAN2、小脑/上位机 FDCAN3）的物理层健康度与抗干扰能力，增加进入 Bus-Off 故障态的累计次数统计，并通过向小脑广播的 0x04400000 状态报文将计数值实时上报给上位机。此版本为联调验证的测试版本。
 
-实现完整的 FDCAN Bus-Off 中断驱动自动恢复机制，解决小脑掉线、BMS 通信中断等
-场景下 FDCAN 永久静默的问题。采用纯异步非阻塞状态机设计，符合 ISO 11898-1
-规范，不影响双电池放电保护等实时任务。
+## 核心改动
 
-## 核心改进
+### 1. 累计计数器与原子防重机制 (Core/Inc/fdcan.h, Core/Src/fdcan.c)
+- 声明并定义 3 个全局进入计数器：
+  - `fdcan1_busoff_enter_count`: 电池 1 (FDCAN1) 进入 Bus-Off 累计次数
+  - `fdcan2_busoff_enter_count`: 电池 2 (FDCAN2) 进入 Bus-Off 累计次数
+  - `fdcan3_busoff_enter_count`: 小脑总线 (FDCAN3) 进入 Bus-Off 累计次数
+- 双路径原子防重互锁：
+  - 硬件中断路径 (`HAL_FDCAN_ErrorStatusCallback`) 与主循环轮询兜底路径 (`FDCAN_HandleInstanceBusOff`) 均在状态机由 `IDLE` 切入 `PENDING` 的临界区入口处增加 `busoff_flag == 0U` 双重检查。
+  - 使用 `FDCAN_IncrementDebugCounter` 确保同一次 Bus-Off 故障严格仅递增 1 次，并在 `0xFFFFFFFF` 处饱和防回绕。
 
-### 1. 中断驱动 + 异步状态机恢复
+### 2. 0x04400000 报文协议打包与即时触发 (Core/Src/fdcan.c)
+- 字段分配：
+  - `Byte 6`: 电池 1 与电池 2 进入 Bus-Off 次数之和（uint8_t，0~255 饱和）
+  - `Byte 7`: FDCAN3 进入 Bus-Off 次数（uint8_t，0~255 饱和）
+- 触发机制优化：
+  - 在 `FDCAN_BatteryCanTask()` 中增加 `busoffChanged` 检测，一旦发生 Bus-Off 导致计数增加且 FDCAN3 可发，立即触发一次 `0x04400000` 报文广播，无需等待周期心跳。
+  - FDCAN3 恢复自愈机制：若发生 Bus-Off 的是 FDCAN3 本身，内存准确记录，待异步状态机恢复完成后第一包立即向小脑补发最新计数值。
 
-- **触发方式**: Bus-Off 中断触发检测，主循环高频处理恢复
-- **状态机**: IDLE → PENDING → REQUEST_INIT → START_SYNC → RECOVERING → IDLE
-- **特性**: 完全非阻塞，无 while 循环，无 HAL_Delay() 阻塞
-- **恢复延迟**: 100ms 稳定期 + 硬件自主完成 129×11 bit 同步（约 5.68ms @ 250kbps）
+### 3. 协议文档同步更新
+- 同步更新 `SYSTEM_ANALYSIS_AND_FUNCTIONS.md` 与 `BATTERY_CAN_DISCONNECT_SAFETY_PLAN.md` 中关于 `0x04400000U` 报文 Byte 6 和 Byte 7 的字段定义。
 
-### 2. 关键设计
-
-#### 代际号机制（Generation Counter）
-
-- 使用递增序号代替时间戳比对
-- 避免 ABA 问题（同一毫秒内的多次 Bus-Off 事件）
-- 防止新事件被旧恢复逻辑清除
-
-#### 兜底检测机制
-
-- 主循环轮询 PSR.BO 标志
-- 防御中断丢失场景
-- 双重检查避免与中断回调竞态
-
-#### 快速恢复路径
-
-- PENDING 状态优先检查硬件自愈
-- 跳过状态机，直接恢复
-- 减少恢复延迟
-
-#### 诊断快照冻结
-
-- Bus-Off 发生瞬间采样 PSR/ECR
-- 避免二次读取清除 LEC/DLEC
-- 保留完整故障现场（ACK Error / Bit Error / CRC Error）
-
-### 3. 安全过滤器配置
-
-- 新增 `FDCAN_ConfigBatteryRxFiltersSafe()` 安全版本
-- 失败返回错误而非调用 `Error_Handler()` 死锁
-- 恢复路径使用安全版本，可重试
-
-### 4. Bus-Off 期间发送暂停
-
-- 转发函数检查 `fdcan3_busoff_flag`
-- Bus-Off 期间丢弃转发请求，避免 TX FIFO 积压
-- 恢复后立即恢复转发能力
-
-## 修复的问题
-
-### 高优先级
-
-- ✅ HAL 状态错误（State = READY 导致无法发送）→ 改为 BUSY
-- ✅ 中断配置参数错误（ConfigInterruptLines 参数类型错误）→ 移除错误调用
-- ✅ SafeRecover 中 Error_Handler 死锁风险 → 安全过滤器配置
-- ✅ Tick 回绕导致超时判断错误 → 改用差值判断
-
-### 中优先级
-
-- ✅ 假恢复问题（HAL_FDCAN_Start 未验证 PSR.BO）→ PSR/ECR/CCCR 全面验证
-- ✅ 恢复延迟过长（1~2秒轮询）→ 中断触发，100ms 精确延迟
-- ✅ PSR 二次读取清除 LEC/DLEC → 使用局部变量快照
-- ✅ 中断竞态条件（标志位无保护）→ 临界区 + 代际号机制
-- ✅ 兜底检测诊断快照竞争 → 双重检查模式
-
-### 低优先级
-
-- ✅ 等待时间不足（5ms → 10ms）
-- ✅ PSR/ECR 持续读取破坏诊断值 → 仅在 Bus-Off 时采样
-
-## 技术细节
-
-### 状态机转换
-
-```
-IDLE: 正常运行
-  → (PSR.BO=1) → PENDING
-
-PENDING: 等待 100ms 稳定期
-  → (快速恢复: PSR.BO=0 && CCCR.INIT=0) → IDLE
-  → (100ms 到期) → REQUEST_INIT
-
-REQUEST_INIT: 请求进入配置模式
-  → (CCCR.INIT=1 确认) → START_SYNC
-  → (10ms 超时) → PENDING (重试)
-
-START_SYNC: 退出配置模式
-  → (CCCR.INIT=0 确认) → RECOVERING
-  → (10ms 超时) → PENDING (重试)
-
-RECOVERING: 等待硬件完成 129×11 bit 同步
-  → (PSR.BO=0 确认) → IDLE (成功)
-  → (无超时，硬件自主完成)
-```
-
-### 中断回调
-
-```c
-void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs)
-{
-  if ((ErrorStatusITs & FDCAN_IT_BUS_OFF) != 0U)
-  {
-    uint32_t psr_snapshot = hfdcan->Instance->PSR;  // 一次读取
-
-    if ((psr_snapshot & FDCAN_PSR_BO) != 0U)
-    {
-      fdcan3_busoff_generation++;
-      fdcan3_busoff_flag = 1U;
-      fdcan3_busoff_state = FDCAN_BUSOFF_STATE_PENDING;
-      fdcan3BusoffDetectTick = HAL_GetTick();
-      fdcan3_last_psr = psr_snapshot;  // 保留真实 LEC/DLEC
-      fdcan3_last_ecr = hfdcan->Instance->ECR;
-    }
-  }
-}
-```
-
-### 恢复验证
-
-```c
-// 验证三项核心条件
-if (((instance->CCCR & FDCAN_CCCR_INIT) == 0U) &&  // 退出配置模式
-    ((instance->PSR & FDCAN_PSR_BO) == 0U) &&      // 脱离 Bus-Off
-    (hfdcan->State == HAL_FDCAN_STATE_BUSY))       // HAL 状态正确
-{
-  // 恢复成功
-}
-```
-
-## 统计与遥测
-
-### 新增导出变量
-
-- `fdcan1/2/3_busoff_recovery_count`: 成功恢复次数
-- `fdcan1/2/3_busoff_recovery_fail_count`: 失败次数
-- `fdcan1/2/3_last_psr`: 最后一次 Bus-Off 的 PSR 快照
-- `fdcan1/2/3_last_ecr`: 最后一次 Bus-Off 的 ECR 快照
-- `battery_can_forward_drop_count`: Bus-Off 期间丢弃的转发帧数
-
-### LEC 错误代码诊断
-
-- 0 = No Error
-- 1 = Stuff Error（位填充错误）
-- 2 = Form Error（帧格式错误）
-- 3 = **Ack Error**（无应答，小脑未启动/掉线）
-- 4 = Bit1 Error（发送隐性位读回显性位）
-- 5 = Bit0 Error（发送显性位读回隐性位，总线短路）
-- 6 = CRC Error（CRC 校验错误，电磁干扰）
-- 7 = No Change（二次读取后的值，已避免）
-
-## 测试建议
-
-### 功能测试
-
-1. **小脑掉线恢复**: 不启动小脑 CAN，验证 100ms 内恢复
-2. **BMS 掉线恢复**: 拔掉电池 CAN 线，验证自动恢复
-3. **快速恢复路径**: 冷却期内硬件自愈，验证直接恢复
-4. **兜底检测**: 禁用中断，验证主循环检测触发
-
-### 诊断验证
-
-1. **LEC 保存**: 观察 `fdcan3_last_psr` 保留真实 LEC 值（非 7）
-2. **统计准确性**: 验证 `recovery_count` 与实际 Bus-Off 次数一致
-3. **竞态保护**: 恢复过程中多次断开/连接，验证无丢失事件
-
-### 长期稳定性
-
-1. **4 小时测试**: 随机触发 Bus-Off 20 次，验证所有恢复成功
-2. **高负载总线**: 验证无超时打断硬件同步
-3. **突发恢复**: 验证 TX FIFO 清空，无过时报文
-
-## 性能影响
-
-- **CPU 占用**: 主循环每次约 5μs（代际号检查 + 状态机）
-- **中断延迟**: Bus-Off 中断回调 < 10μs（仅设置标志位）
-- **恢复时间**: 100ms 延迟 + 硬件同步（5.68ms @ 250kbps）
-- **内存占用**: 约 200 字节（状态变量 + 统计）
-
-## 符合规范
-
-- ✅ ISO 11898-1: Bus-Off 恢复需 129×11 bit 隐性位
-- ✅ M_CAN 规范: PSR.LEC/DLEC 读取后清除
-- ✅ STM32G4 HAL: 状态机与 HAL 状态协同
-- ✅ MISRA-C 部分规则: 无 magic number，使用宏定义
-
-## 变更文件
-
-- Core/Inc/fdcan.h: 新增接口声明和统计变量导出
-- Core/Src/fdcan.c: 实现完整的 Bus-Off 恢复机制（约 400 行）
-- Core/Src/main.c: 主循环调用 `FDCAN_CheckAndRecoverAllBusOff()`
-
-## 向后兼容
-
-- ✅ 不影响现有发送和接收逻辑
-- ✅ CubeMX 重新生成代码不受影响（USER CODE 区域）
-- ✅ 统计变量可选使用，不影响核心功能
-
-## 审查状态
-
-- ✅ 编译验证通过
-- ✅ 代码审查通过（3 轮评审）
-- ⏳ 待硬件功能测试
-- ⏳ 待长期稳定性测试
-
----
-
-日期: 2026-09-16
+## 验证情况
+- CMake / Ninja Debug 构建：0 警告，0 错误
+- CMake / Ninja Release 构建：0 警告，0 错误

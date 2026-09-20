@@ -96,6 +96,11 @@ HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
 /* Bus-Off 自动恢复接口 */
 void FDCAN_CheckAndRecoverAllBusOff(void);
 
+/* Bus-Off 进入统计（进入 Bus-Off 状态的累计次数，volatile 确保中断与多任务实时性） */
+extern volatile uint32_t fdcan1_busoff_enter_count;
+extern volatile uint32_t fdcan2_busoff_enter_count;
+extern volatile uint32_t fdcan3_busoff_enter_count;
+
 /* Bus-Off 恢复统计（用于调试和遥测，volatile 确保实时性） */
 extern volatile uint32_t fdcan1_busoff_recovery_count;
 extern volatile uint32_t fdcan1_busoff_recovery_fail_count;

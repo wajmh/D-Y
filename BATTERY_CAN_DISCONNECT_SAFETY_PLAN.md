@@ -82,7 +82,8 @@ flowchart TD
 | **Byte 3** | **电池 1 回充 MOS 状态** | `0x00`: 关闭 (OFF)<br>`0x01`: 开启 (ON) (对应 PA4 引脚实际电平) |
 | **Byte 4** | **电池 2 主放电 MOS 状态** | `0x00`: 关闭 (OFF)<br>`0x01`: 开启 (ON) (对应 PA5 引脚实际电平) |
 | **Byte 5** | **电池 2 回充 MOS 状态** | `0x00`: 关闭 (OFF)<br>`0x01`: 开启 (ON) (对应 PC4 引脚实际电平) |
-| **Byte 6 ~ Byte 7** | 保留 | 填充 `0x00` |
+| **Byte 6** | **电池 1 与电池 2 Bus-Off 累计次数** | `uint8_t`: 电池 1 (FDCAN1) 与电池 2 (FDCAN2) 进入 Bus-Off 累计次数之和（0 ~ 255 饱和） |
+| **Byte 7** | **小脑 CAN Bus-Off 累计次数** | `uint8_t`: FDCAN3 进入 Bus-Off 累计次数（0 ~ 255 饱和） |
 
 ---
 

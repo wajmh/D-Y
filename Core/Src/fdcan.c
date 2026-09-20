@@ -92,6 +92,7 @@ static volatile FDCAN_BusOffState_t fdcan1_busoff_state = FDCAN_BUSOFF_STATE_IDL
 static volatile uint32_t fdcan1BusoffDetectTick = 0U;
 static volatile uint32_t fdcan1StateTick = 0U;
 static volatile uint32_t fdcan1SyncStartTick = 0U;
+volatile uint32_t fdcan1_busoff_enter_count = 0U;
 volatile uint32_t fdcan1_busoff_recovery_count = 0U;
 volatile uint32_t fdcan1_busoff_recovery_fail_count = 0U;
 volatile uint32_t fdcan1_last_psr = 0U;
@@ -104,6 +105,7 @@ static volatile FDCAN_BusOffState_t fdcan2_busoff_state = FDCAN_BUSOFF_STATE_IDL
 static volatile uint32_t fdcan2BusoffDetectTick = 0U;
 static volatile uint32_t fdcan2StateTick = 0U;
 static volatile uint32_t fdcan2SyncStartTick = 0U;
+volatile uint32_t fdcan2_busoff_enter_count = 0U;
 volatile uint32_t fdcan2_busoff_recovery_count = 0U;
 volatile uint32_t fdcan2_busoff_recovery_fail_count = 0U;
 volatile uint32_t fdcan2_last_psr = 0U;
@@ -116,6 +118,7 @@ static volatile FDCAN_BusOffState_t fdcan3_busoff_state = FDCAN_BUSOFF_STATE_IDL
 static volatile uint32_t fdcan3BusoffDetectTick = 0U;
 static volatile uint32_t fdcan3StateTick = 0U;
 static volatile uint32_t fdcan3SyncStartTick = 0U;
+volatile uint32_t fdcan3_busoff_enter_count = 0U;
 volatile uint32_t fdcan3_busoff_recovery_count = 0U;
 volatile uint32_t fdcan3_busoff_recovery_fail_count = 0U;
 volatile uint32_t fdcan3_last_psr = 0U;
@@ -225,6 +228,7 @@ static void FDCAN_SendEmergencyStopReportToRk(void)
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
 {
   uint8_t alarmData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+  uint32_t batBusoffTotal;
 
   /* P1: Bus-Off pending / recovering 期间禁止入队 */
   if (fdcan3_busoff_flag != 0U)
@@ -238,6 +242,13 @@ HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
   alarmData[3] = bat1_recharge_mos_state;
   alarmData[4] = bat2_discharge_mos_state;
   alarmData[5] = bat2_recharge_mos_state;
+
+  /* Byte 6: 电池1与电池2进入 Bus-Off 累计次数之和（0~255 饱和） */
+  batBusoffTotal = fdcan1_busoff_enter_count + fdcan2_busoff_enter_count;
+  alarmData[6] = (batBusoffTotal > 255U) ? 255U : (uint8_t)batBusoffTotal;
+
+  /* Byte 7: FDCAN3 进入 Bus-Off 累计次数（0~255 饱和） */
+  alarmData[7] = (fdcan3_busoff_enter_count > 255U) ? 255U : (uint8_t)fdcan3_busoff_enter_count;
 
   return FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
 }
@@ -573,6 +584,8 @@ void FDCAN_BatteryCanTask(void)
     static uint8_t prevBat2DischargeMos = 0U;
     static uint8_t prevBat2RechargeMos = 0U;
     static uint8_t alarmClearBurstRemaining = 0U;
+    static uint32_t prevBatBusoffTotal = 0U;
+    static uint32_t prevFdcan3Busoff = 0U;
 
     uint8_t curBat1Alarm = Power_GetBattery1AlarmStatus();
     /* 单电池版本：整机异常告警仅由电池 1 决定，电池 2 未插属于正常硬件配置 */
@@ -583,6 +596,12 @@ void FDCAN_BatteryCanTask(void)
                           (bat1_recharge_mos_state != prevBat1RechargeMos) ||
                           (bat2_discharge_mos_state != prevBat2DischargeMos) ||
                           (bat2_recharge_mos_state != prevBat2RechargeMos)) ? 1U : 0U;
+
+    /* 监测 Bus-Off 进入计数是否发生增加 */
+    uint32_t curBatBusoffTotal = fdcan1_busoff_enter_count + fdcan2_busoff_enter_count;
+    uint32_t curFdcan3Busoff = fdcan3_busoff_enter_count;
+    uint8_t busoffChanged = ((curBatBusoffTotal != prevBatBusoffTotal) ||
+                             (curFdcan3Busoff != prevFdcan3Busoff)) ? 1U : 0U;
 
     /* 检测是否从有报警恢复到全正常 */
     if ((hasAlarm == 0U) && (prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL))
@@ -603,6 +622,8 @@ void FDCAN_BatteryCanTask(void)
         if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
         {
           batteryAlarmReportLastTxTick = now;
+          prevBatBusoffTotal = curBatBusoffTotal;
+          prevFdcan3Busoff = curFdcan3Busoff;
         }
       }
     }
@@ -614,15 +635,19 @@ void FDCAN_BatteryCanTask(void)
         {
           batteryAlarmReportLastTxTick = now;
           alarmClearBurstRemaining--;
+          prevBatBusoffTotal = curBatBusoffTotal;
+          prevFdcan3Busoff = curFdcan3Busoff;
         }
       }
     }
-    else if (mosChanged != 0U)
+    else if ((mosChanged != 0U) || (busoffChanged != 0U))
     {
-      /* MOS 状态发生开/关动作时，立即触发发送，无需等待 100ms 计时 */
+      /* MOS 状态发生开/关动作或进入 Bus-Off 时，立即触发发送，无需等待 100ms 计时 */
       if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
       {
         batteryAlarmReportLastTxTick = now;
+        prevBatBusoffTotal = curBatBusoffTotal;
+        prevFdcan3Busoff = curFdcan3Busoff;
       }
     }
     else
@@ -632,6 +657,8 @@ void FDCAN_BatteryCanTask(void)
         if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
         {
           batteryAlarmReportLastTxTick = now;
+          prevBatBusoffTotal = curBatBusoffTotal;
+          prevFdcan3Busoff = curFdcan3Busoff;
         }
       }
     }
@@ -696,6 +723,7 @@ static uint8_t FDCAN_VerifyRecovery(const FDCAN_GlobalTypeDef *instance, const F
  * @param stateTick 对应状态切换时间戳指针
  * @param syncStartTick 对应总线同步开始时间戳指针
  * @param state 对应恢复状态指针
+ * @param enterCount 进入 Bus-Off 累计计数器指针（可选，可为 NULL）
  * @param recoveryCount 恢复成功计数器指针
  * @param recoveryFailCount 恢复失败计数器指针
  * @param diagPsr 诊断指标：最后一次采样到的 PSR 指针（可选，可为 NULL）
@@ -711,6 +739,7 @@ static void FDCAN_HandleInstanceBusOff(
   volatile uint32_t *stateTick,
   volatile uint32_t *syncStartTick,
   volatile FDCAN_BusOffState_t *state,
+  volatile uint32_t *enterCount,
   volatile uint32_t *recoveryCount,
   volatile uint32_t *recoveryFailCount,
   volatile uint32_t *diagPsr,
@@ -747,6 +776,10 @@ static void FDCAN_HandleInstanceBusOff(
       /* 双重检查：防止中断回调已经处理了这个 Bus-Off 事件 */
       if (*busoffFlag == 0U)
       {
+        if (enterCount != NULL)
+        {
+          FDCAN_IncrementDebugCounter(enterCount);
+        }
         (*generation)++;
         *busoffFlag = 1U;
         *detectTick = now;
@@ -914,6 +947,7 @@ void FDCAN_CheckAndRecoverAllBusOff(void)
       &fdcan1_busoff_flag, &fdcan1_busoff_generation,
       &fdcan1BusoffDetectTick, &fdcan1StateTick, &fdcan1SyncStartTick,
       &fdcan1_busoff_state,
+      &fdcan1_busoff_enter_count,
       &fdcan1_busoff_recovery_count, &fdcan1_busoff_recovery_fail_count,
       &fdcan1_last_psr, &fdcan1_last_ecr,
       now);
@@ -923,6 +957,7 @@ void FDCAN_CheckAndRecoverAllBusOff(void)
       &fdcan2_busoff_flag, &fdcan2_busoff_generation,
       &fdcan2BusoffDetectTick, &fdcan2StateTick, &fdcan2SyncStartTick,
       &fdcan2_busoff_state,
+      &fdcan2_busoff_enter_count,
       &fdcan2_busoff_recovery_count, &fdcan2_busoff_recovery_fail_count,
       &fdcan2_last_psr, &fdcan2_last_ecr,
       now);
@@ -932,6 +967,7 @@ void FDCAN_CheckAndRecoverAllBusOff(void)
       &fdcan3_busoff_flag, &fdcan3_busoff_generation,
       &fdcan3BusoffDetectTick, &fdcan3StateTick, &fdcan3SyncStartTick,
       &fdcan3_busoff_state,
+      &fdcan3_busoff_enter_count,
       &fdcan3_busoff_recovery_count, &fdcan3_busoff_recovery_fail_count,
       &fdcan3_last_psr, &fdcan3_last_ecr,
       now);
@@ -960,6 +996,10 @@ void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorSt
     {
       if (hfdcan->Instance == FDCAN1)
       {
+        if (fdcan1_busoff_flag == 0U)
+        {
+          FDCAN_IncrementDebugCounter(&fdcan1_busoff_enter_count);
+        }
         fdcan1_busoff_generation++;
         fdcan1_busoff_flag = 1U;
         fdcan1_busoff_state = FDCAN_BUSOFF_STATE_PENDING;
@@ -970,6 +1010,10 @@ void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorSt
       }
       else if (hfdcan->Instance == FDCAN2)
       {
+        if (fdcan2_busoff_flag == 0U)
+        {
+          FDCAN_IncrementDebugCounter(&fdcan2_busoff_enter_count);
+        }
         fdcan2_busoff_generation++;
         fdcan2_busoff_flag = 1U;
         fdcan2_busoff_state = FDCAN_BUSOFF_STATE_PENDING;
@@ -979,6 +1023,10 @@ void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorSt
       }
       else if (hfdcan->Instance == FDCAN3)
       {
+        if (fdcan3_busoff_flag == 0U)
+        {
+          FDCAN_IncrementDebugCounter(&fdcan3_busoff_enter_count);
+        }
         fdcan3_busoff_generation++;
         fdcan3_busoff_flag = 1U;
         fdcan3_busoff_state = FDCAN_BUSOFF_STATE_PENDING;
