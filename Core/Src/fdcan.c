@@ -65,6 +65,8 @@ volatile uint32_t battery_can_forward_count = 0U;
 volatile uint32_t battery_can_forward_drop_count = 0U;
 volatile float battery1_can_sum_voltage = 0.0f;
 volatile float battery1_can_current = 0.0f;
+volatile float battery1_can_soc = 0.0f;
+volatile uint8_t battery1_can_soc_valid = 0U;
 volatile uint32_t battery1_can_rx_id = 0U;
 volatile uint32_t battery1_can_rx_count = 0U;
 volatile uint32_t battery1_can_status_last_rx_tick = 0U;
@@ -76,6 +78,8 @@ volatile uint32_t battery1_can_mos_rx_count = 0U;
 volatile uint32_t battery1_can_mos_last_rx_tick = 0U;
 volatile float battery2_can_sum_voltage = 0.0f;
 volatile float battery2_can_current = 0.0f;
+volatile float battery2_can_soc = 0.0f;
+volatile uint8_t battery2_can_soc_valid = 0U;
 volatile uint32_t battery2_can_rx_id = 0U;
 volatile uint32_t battery2_can_rx_count = 0U;
 volatile uint32_t battery2_can_status_last_rx_tick = 0U;
@@ -659,17 +663,35 @@ static void FDCAN_ForwardBatteryFrameToRk(uint8_t batteryIndex,
   __set_PRIMASK(primask);
 }
 
-static void FDCAN_ParseBatteryStatus(uint8_t batteryIndex, uint32_t rxId, const uint8_t rxData[])
+static void FDCAN_ParseBatteryStatus(uint8_t batteryIndex, uint32_t rxId, const uint8_t rxData[], uint32_t dataLength)
 {
   uint16_t rawVoltage = ((uint16_t)rxData[0] << 8) | rxData[1];
   uint16_t rawCurrent = ((uint16_t)rxData[2] << 8) | rxData[3];
   float sumVoltage = (float)rawVoltage * 0.1f;
   float current = ((float)rawCurrent - 30000.0f) * 0.1f;
+  float soc = 0.0f;
+  uint8_t hasSoc = 0U;
+
+  if (dataLength >= FDCAN_DLC_BYTES_6)
+  {
+    uint16_t rawSoc = ((uint16_t)rxData[4] << 8) | rxData[5];
+    soc = (float)rawSoc * 0.1f;
+    if (soc > 100.0f)
+    {
+      soc = 100.0f;
+    }
+    hasSoc = 1U;
+  }
 
   if (batteryIndex == 1U)
   {
     battery1_can_sum_voltage = sumVoltage;
     battery1_can_current = current;
+    if (hasSoc != 0U)
+    {
+      battery1_can_soc = soc;
+      battery1_can_soc_valid = 1U;
+    }
     battery1_can_rx_id = rxId;
     FDCAN_IncrementDebugCounter(&battery1_can_rx_count);
     battery1_can_status_last_rx_tick = HAL_GetTick();
@@ -678,6 +700,11 @@ static void FDCAN_ParseBatteryStatus(uint8_t batteryIndex, uint32_t rxId, const 
   {
     battery2_can_sum_voltage = sumVoltage;
     battery2_can_current = current;
+    if (hasSoc != 0U)
+    {
+      battery2_can_soc = soc;
+      battery2_can_soc_valid = 1U;
+    }
     battery2_can_rx_id = rxId;
     FDCAN_IncrementDebugCounter(&battery2_can_rx_count);
     battery2_can_status_last_rx_tick = HAL_GetTick();
@@ -767,7 +794,7 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
         ((rxHeader.Identifier & FDCAN_BATTERY_STATUS_ID_MASK) == FDCAN_BATTERY_STATUS_ID_BASE) &&
         (rxHeader.DataLength >= FDCAN_DLC_BYTES_4))
     {
-      FDCAN_ParseBatteryStatus(batteryIndex, rxHeader.Identifier, rxData);
+      FDCAN_ParseBatteryStatus(batteryIndex, rxHeader.Identifier, rxData, rxHeader.DataLength);
     }
     else if ((rxHeader.IdType == FDCAN_EXTENDED_ID) &&
              ((rxHeader.Identifier & FDCAN_BATTERY_MOS_ID_MASK) == FDCAN_BATTERY_MOS_ID_BASE) &&
@@ -1513,6 +1540,58 @@ void HAL_FDCAN_MspDeInit(FDCAN_HandleTypeDef* fdcanHandle)
 }
 
 /* USER CODE BEGIN 1 */
+float FDCAN_GetBatterySoc(uint8_t batteryIndex)
+{
+  if (batteryIndex == 1U)
+  {
+    return battery1_can_soc;
+  }
+  else if (batteryIndex == 2U)
+  {
+    return battery2_can_soc;
+  }
+  return 0.0f;
+}
 
+uint8_t FDCAN_IsBatterySocValid(uint8_t batteryIndex)
+{
+  uint32_t now = HAL_GetTick();
+
+  if (batteryIndex == 1U)
+  {
+    if ((battery1_can_soc_valid != 0U) &&
+        (battery1_can_status_last_rx_tick != 0U) &&
+        ((now - battery1_can_status_last_rx_tick) <= 2000U))
+    {
+      return 1U;
+    }
+  }
+  else if (batteryIndex == 2U)
+  {
+    if ((battery2_can_soc_valid != 0U) &&
+        (battery2_can_status_last_rx_tick != 0U) &&
+        ((now - battery2_can_status_last_rx_tick) <= 2000U))
+    {
+      return 1U;
+    }
+  }
+
+  return 0U;
+}
+
+uint8_t FDCAN_IsAnyBusOff(void)
+{
+  if ((fdcan1_busoff_flag != 0U) || (fdcan2_busoff_flag != 0U) || (fdcan3_busoff_flag != 0U))
+  {
+    return 1U;
+  }
+  if (((FDCAN1->PSR & FDCAN_PSR_BO) != 0U) ||
+      ((FDCAN2->PSR & FDCAN_PSR_BO) != 0U) ||
+      ((FDCAN3->PSR & FDCAN_PSR_BO) != 0U))
+  {
+    return 1U;
+  }
+  return 0U;
+}
 /* USER CODE END 1 */
 

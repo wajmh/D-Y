@@ -21,7 +21,6 @@
 #include "adc.h"
 #include "dma.h"
 #include "fdcan.h"
-#include "i2c.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -92,23 +91,24 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_ADC1_Init();
   MX_ADC2_Init();
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   MX_FDCAN3_Init();
-  MX_I2C1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  ADC1_StartDMA();//DMA ADC init
   ADC2_StartDMA();
   HAL_Delay(20);
-  ADC_CalibrateLegCurrentOffsets();
+  ADC_CalibrateCurrentOffsets();
   ADC_UpdateCurrents();
   ADC2_UpdateBatteryVoltages();
   FDCAN_BatteryCanStart();
   Power_UpdateGpioDebugStates();//mos管的检测
   Power_EnterDischargeMode();//初始化双电池状态
+  Power_UpdateStatusLed();//正常上电后点亮状态指示灯（绿灯常亮）
+  Power_SetBuzzer(1);     // 上电蜂鸣测试：鸣叫 200ms
+  HAL_Delay(200);
+  Power_SetBuzzer(0);
 
   /* USER CODE END 2 */
 
@@ -124,6 +124,7 @@ int main(void)
     FDCAN_BatteryCanTask();
     Power_UpdateGpioDebugStates();
     Power_ModeTask();
+    Power_UpdateStatusLed();//状态指示灯更新（>=70%绿灯常亮，<70%蓝灯常亮）
     FDCAN_CheckAndRecoverAllBusOff(); // ★ 纯异步执行恢复状态机
   }
   /* USER CODE END 3 */

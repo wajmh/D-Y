@@ -58,6 +58,7 @@ static uint32_t chargeReplyLastTxTick = 0U;
 static uint8_t battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 static uint8_t battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 
+volatile uint8_t bat_charge_mos_state = 0U;
 volatile uint8_t bat1_charge_mos_state = 0U;
 volatile uint8_t bat1_discharge_mos_state = 0U;
 volatile uint8_t bat1_recharge_mos_state = 0U;
@@ -68,6 +69,8 @@ volatile uint8_t bat2_recharge_mos_state = 0U;
 volatile uint8_t bat2_pre_discharge_mos_state = 0U;
 volatile uint8_t peripheral_power_state = 0U;
 volatile uint8_t back_emf_absorb_state = 0U;
+volatile uint8_t back_emf_absorb_1_state = 0U;
+volatile uint8_t back_emf_absorb_2_state = 0U;
 
 static uint8_t Power_IsBatteryCanAlive(uint8_t batteryIndex);
 static uint8_t Power_IsBatteryBmsDischargeAllowed(uint8_t batteryIndex);
@@ -90,7 +93,6 @@ static void Power_StartBattery1PreDischarge(void);
 static void Power_StartBattery2PreDischarge(void);
 static void Power_FinishBattery1PreDischarge(void);
 static void Power_FinishBattery2PreDischarge(void);
-static void Power_ReleaseBackEmfAbsorbOnce(void);
 static void Power_EnableBattery1DischargePath(void);
 static void Power_EnableBattery2DischargePath(void);
 static void Power_DisableLowerRechargeMosBeforeNewDischarge(uint8_t newBatteryIndex);
@@ -121,40 +123,43 @@ void MX_GPIO_Init(void)
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_4|GPIO_PIN_5, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_2
+                          |GPIO_PIN_4|GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4|GPIO_PIN_11|GPIO_PIN_12, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5|GPIO_PIN_7, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_10, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_6
+                          |GPIO_PIN_7|GPIO_PIN_9, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET);
-
-  /*Configure GPIO pins : PA0 PA4 PA5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_4|GPIO_PIN_5;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PC4 PC11 PC12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_11|GPIO_PIN_12;
+  /*Configure GPIO pins : PC13 PC14 PC15 PC2
+                           PC4 PC10 PC11 PC12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_2
+                          |GPIO_PIN_4|GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB0 PB1 PB10 PB11 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_10|GPIO_PIN_11;
+  /*Configure GPIO pins : PA5 PA7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB10 PB11 PB12 PB6
+                           PB7 PB9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_6
+                          |GPIO_PIN_7|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -171,34 +176,39 @@ void MX_GPIO_Init(void)
 /* USER CODE BEGIN 2 */
 void Power_UpdateGpioDebugStates(void)
 {
-  bat1_charge_mos_state = (HAL_GPIO_ReadPin(BAT1_CHARGE_MOS_GPIO_Port, BAT1_CHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  bat_charge_mos_state = (HAL_GPIO_ReadPin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  bat1_charge_mos_state = bat_charge_mos_state;
   bat1_discharge_mos_state = (HAL_GPIO_ReadPin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   bat1_recharge_mos_state = (HAL_GPIO_ReadPin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   bat1_pre_discharge_mos_state = (HAL_GPIO_ReadPin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
 
-  bat2_charge_mos_state = (HAL_GPIO_ReadPin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  bat2_charge_mos_state = bat_charge_mos_state;
   bat2_discharge_mos_state = (HAL_GPIO_ReadPin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   bat2_recharge_mos_state = (HAL_GPIO_ReadPin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   bat2_pre_discharge_mos_state = (HAL_GPIO_ReadPin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
 
   peripheral_power_state = (HAL_GPIO_ReadPin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
-  back_emf_absorb_state = (HAL_GPIO_ReadPin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  back_emf_absorb_1_state = (HAL_GPIO_ReadPin(BACK_EMF_ABSORB_1_GPIO_Port, BACK_EMF_ABSORB_1_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  back_emf_absorb_2_state = (HAL_GPIO_ReadPin(BACK_EMF_ABSORB_2_GPIO_Port, BACK_EMF_ABSORB_2_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  back_emf_absorb_state = ((back_emf_absorb_1_state != 0U) || (back_emf_absorb_2_state != 0U)) ? 1U : 0U;
 }
 
 void Power_AllMosOff(void)
 {
-  HAL_GPIO_WritePin(BAT1_CHARGE_MOS_GPIO_Port, BAT1_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_ON);//线接错了，反接下
-  backEmfAbsorbReleased = 0U;
+  HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
 
-  HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
-
-  HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+
+  /* 两路反电势吸收泄放 MOS 均关断 */
+  HAL_GPIO_WritePin(BACK_EMF_ABSORB_1_GPIO_Port, BACK_EMF_ABSORB_1_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BACK_EMF_ABSORB_2_GPIO_Port, BACK_EMF_ABSORB_2_Pin, POWER_SWITCH_OFF);
+  backEmfAbsorbReleased = 0U;
+
   powerPreDischargeBatteryIndex = 0U;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
@@ -391,17 +401,6 @@ void Power_DischargeModeTask(void)
   Power_UpdateBattery1Path(bat1Enable);
   Power_UpdateBattery2Path(bat2Enable);
 
-  /*
-   * 若母线上没有任何一路电池处于放电态 (DISCHARGE)，说明母线无电池供电，
-   * 必须维持反电动势吸收回路导通（保护电机反电动势），并重置反电吸收标志。
-   */
-  if ((battery1Control.state != POWER_BATTERY_STATE_DISCHARGE) &&
-      (battery2Control.state != POWER_BATTERY_STATE_DISCHARGE))
-  {
-    HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_ON);
-    backEmfAbsorbReleased = 0U;
-  }
-
   Power_UpdateRechargeMos((battery1Control.state == POWER_BATTERY_STATE_DISCHARGE) ? 1U : 0U,
                           (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE) ? 1U : 0U);
   Power_UpdatePeripheralPower(bat1PhysOnline, bat2PhysOnline);
@@ -420,6 +419,51 @@ void Power_ExitDischargeMode(void)
   Power_AllMosOff();
 }
 
+void Power_UpdateVbusPowerRelease(void)
+{
+  float currentVbus = ADC_GetVbusVoltage();
+
+  /*
+   * 反电势吸收保护控制规则：
+   * 仅当 VBUS 电压超过 83V 时，才会打开对应处于放电态电池的泄放 MOS；
+   * 当 VBUS 电压回落到 82V（1V 滞回防抖）或对应电池退出放电态时，关闭对应泄放 MOS。
+   */
+
+  /* 电池1 对应泄放回路 1 (PB12) */
+  if (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE)
+  {
+    if (currentVbus >= POWER_VBUS_RELEASE_OPEN_VOLTAGE)
+    {
+      HAL_GPIO_WritePin(BACK_EMF_ABSORB_1_GPIO_Port, BACK_EMF_ABSORB_1_Pin, POWER_SWITCH_ON);
+    }
+    else if (currentVbus <= POWER_VBUS_RELEASE_CLOSE_VOLTAGE)
+    {
+      HAL_GPIO_WritePin(BACK_EMF_ABSORB_1_GPIO_Port, BACK_EMF_ABSORB_1_Pin, POWER_SWITCH_OFF);
+    }
+  }
+  else
+  {
+    HAL_GPIO_WritePin(BACK_EMF_ABSORB_1_GPIO_Port, BACK_EMF_ABSORB_1_Pin, POWER_SWITCH_OFF);
+  }
+
+  /* 电池2 对应泄放回路 2 (PB11) */
+  if (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE)
+  {
+    if (currentVbus >= POWER_VBUS_RELEASE_OPEN_VOLTAGE)
+    {
+      HAL_GPIO_WritePin(BACK_EMF_ABSORB_2_GPIO_Port, BACK_EMF_ABSORB_2_Pin, POWER_SWITCH_ON);
+    }
+    else if (currentVbus <= POWER_VBUS_RELEASE_CLOSE_VOLTAGE)
+    {
+      HAL_GPIO_WritePin(BACK_EMF_ABSORB_2_GPIO_Port, BACK_EMF_ABSORB_2_Pin, POWER_SWITCH_OFF);
+    }
+  }
+  else
+  {
+    HAL_GPIO_WritePin(BACK_EMF_ABSORB_2_GPIO_Port, BACK_EMF_ABSORB_2_Pin, POWER_SWITCH_OFF);
+  }
+}
+
 void Power_ModeTask(void)
 {
   uint8_t battery1Present;
@@ -436,10 +480,12 @@ void Power_ModeTask(void)
     battery2Present = Power_IsBatteryCanPresent(2U);
     Power_UpdateChargeMode(battery1Present, battery2Present);
     Power_UpdatePeripheralPower(battery1Present, battery2Present);
+    Power_UpdateVbusPowerRelease();
     return;
   }
 
   Power_DischargeModeTask();
+  Power_UpdateVbusPowerRelease();
 }
 
 static void Power_MaintainChargeModeVbusPower(uint8_t battery1Present, uint8_t battery2Present)
@@ -522,8 +568,7 @@ void Power_ExitChargeMode(void)
 {
   if (powerWorkMode == POWER_WORK_MODE_CHARGE)
   {
-    HAL_GPIO_WritePin(BAT1_CHARGE_MOS_GPIO_Port, BAT1_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
-    HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+    HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
 
     powerWorkMode = POWER_WORK_MODE_DISCHARGE;
     rechargeCurrentOnlyMode = 0U;
@@ -551,12 +596,9 @@ static uint8_t Power_IsBatteryCanPresent(uint8_t batteryIndex)
 
 static void Power_SetChargeMos(uint8_t mask)
 {
-  HAL_GPIO_WritePin(BAT1_CHARGE_MOS_GPIO_Port,
-                    BAT1_CHARGE_MOS_Pin,
-                    ((mask & 0x01U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port,
-                    BAT2_CHARGE_MOS_Pin,
-                    ((mask & 0x02U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port,
+                    BAT_CHARGE_MOS_Pin,
+                    (mask != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
 }
 
 static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Present)
@@ -695,35 +737,32 @@ uint8_t Power_GetBattery2AlarmStatus(void)
 
 uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex)
 {
-  float adcVoltage;
   uint8_t canAlive;
-  uint8_t bmsAllowed;
 
   if ((batteryIndex < 1U) || (batteryIndex > 2U))
   {
     return 0U;
   }
 
-  adcVoltage = (batteryIndex == 1U) ? battery1_voltage : battery2_voltage;
   canAlive = Power_IsBatteryCanAlive(batteryIndex);
-  bmsAllowed = Power_IsBatteryBmsDischargeAllowed(batteryIndex);
 
   /*
-   * 电池物理在位判定（以 BMS 放电主权为主，ADC 物理采样为辅）：
-   * 1. 首先判断 BMS 的 CAN 消息：
-   *    若 CAN 正常且 BMS 明确允许放电 (canAlive && bmsAllowed)，
-   *    说明电池处于正常放电工作状态，坚决判定为在位 (1)，彻底杜绝剧烈运动时的误判摔狗；
-   * 2. 若 BMS 不处于允许放电态（BMS 明确禁止放电，或拔出插头导致 CAN 超时 2s 掉线）：
-   *    再通过 ADC 采样判断端子电压是否低于 20V (BATTERY_PHYSICAL_PRESENT_VOLTAGE)。
-   *    若端子电压确实低于 20V，说明电池真正关机 / 断电 / 物理拔出，判定为不在位 (0)；
-   * 3. 若 CAN 掉线但端子电压仍 >= 20V（真·CAN 掉线工况），仍判定为在位 (1)，保持本地动力供电。
+   * 电池物理在位判定：
+   * 新硬件取消了 PA6/PA7 单电池模拟分压采样，无法直接通过板载 ADC 测量电池端子开路电压。
+   * 1. 只要 CAN 保持在线通信，说明电池物理插入且处于开机通信状态，判定为在位 (1)；
+   * 2. 若 CAN 掉线，但该电池当前已经处于放电状态 (POWER_BATTERY_STATE_DISCHARGE)：
+   *    说明电池物理连接依然存在且正在为主机供电。
+   *    此时判定为物理在位 (1)，从而让 Power_DischargeModeTask 准确进入：
+   *    batteryAlarmStatus = BATTERY_ALARM_STATUS_CAN_COMM_LOST (0x01)，保持放电不断动力，
+   *    并通过 FDCAN3 上报 0x01 给小脑让机器狗受控阻尼下蹲，杜绝粗暴断电摔狗；
+   * 3. 其它状态下（未启动放电）CAN 超时则判定为不在位 (0)。
    */
-  if ((canAlive != 0U) && (bmsAllowed != 0U))
+  if (canAlive != 0U)
   {
     return 1U;
   }
 
-  if (adcVoltage >= BATTERY_PHYSICAL_PRESENT_VOLTAGE)
+  if (((batteryIndex == 1U) ? battery1Control.state : battery2Control.state) == POWER_BATTERY_STATE_DISCHARGE)
   {
     return 1U;
   }
@@ -797,28 +836,20 @@ static float Power_GetBatteryCanVoltage(uint8_t batteryIndex)
 __attribute__((unused))
 static float Power_GetBatteryEffectiveVoltage(uint8_t batteryIndex)
 {
-  if (Power_IsBatteryCanAlive(batteryIndex) != 0U)
-  {
-    return Power_GetBatteryCanVoltage(batteryIndex);
-  }
-
-  return (batteryIndex == 1U) ? battery1_voltage : battery2_voltage;
+  return Power_GetBatteryCanVoltage(batteryIndex);
 }
 
 static float Power_GetBalancedVoltageDiff(void)
 {
   /*
-   * 双电池压差基准统一：
-   * 1. 当两块电池 CAN 均在线时，统一采用电池内部 BMS 采集的电芯总压作差；
-   * 2. 若任一电池 CAN 离线，统一采用电源板板载 ADC 分压采样值作差；
-   * 杜绝将内部电芯电压与外部板端带载采样电压混算，避免不同传感器失调击穿 0.10V 阈值。
+   * 双电池压差基准：采用双电池内部 BMS 采集的电芯总压作差
    */
   if ((Power_IsBatteryCanAlive(1U) != 0U) && (Power_IsBatteryCanAlive(2U) != 0U))
   {
     return Power_GetBatteryCanVoltage(1U) - Power_GetBatteryCanVoltage(2U);
   }
 
-  return battery1_voltage - battery2_voltage;
+  return 0.0f;
 }
 
 static uint8_t Power_GetRechargeMaskByCanVoltage(uint8_t battery1Ready, uint8_t battery2Ready)
@@ -925,22 +956,11 @@ static void Power_FinishBattery2PreDischarge(void)
   powerPreDischargeBatteryIndex = 0U;
 }
 
-static void Power_ReleaseBackEmfAbsorbOnce(void)
-{
-  if (backEmfAbsorbReleased == 0U)
-  {
-    HAL_Delay(POWER_PRE_DISCHARGE_DELAY);
-    HAL_GPIO_WritePin(BACK_EMF_ABSORB_GPIO_Port, BACK_EMF_ABSORB_Pin, POWER_SWITCH_OFF);//反接
-    backEmfAbsorbReleased = 1U;
-  }//只操作一次
-}
-
 static void Power_EnableBattery1DischargePath(void)
 {
   Power_DisableLowerRechargeMosBeforeNewDischarge(1U);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
-  Power_ReleaseBackEmfAbsorbOnce();
   battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
 }
 
@@ -949,7 +969,6 @@ static void Power_EnableBattery2DischargePath(void)
   Power_DisableLowerRechargeMosBeforeNewDischarge(2U);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
-  Power_ReleaseBackEmfAbsorbOnce();
   battery2Control.state = POWER_BATTERY_STATE_DISCHARGE;
 }
 
@@ -1060,5 +1079,104 @@ static void Power_DisableBattery2Path(void)
 static void Power_UpdateRechargeMos(uint8_t battery1Ready, uint8_t battery2Ready)
 {
   Power_SetRechargeMos(Power_GetRechargeMaskByCanVoltage(battery1Ready, battery2Ready));
+}
+
+void Power_SetDcdc12V(uint8_t enable)
+{
+  HAL_GPIO_WritePin(DCDC_EN_12V_GPIO_Port, DCDC_EN_12V_Pin, (enable != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void Power_SetDcdc24V(uint8_t enable)
+{
+  HAL_GPIO_WritePin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin, (enable != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void Power_SetRgbLed(uint8_t r, uint8_t g, uint8_t b)
+{
+  HAL_GPIO_WritePin(RGB_LED_R_GPIO_Port, RGB_LED_R_Pin, (r != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(RGB_LED_G_GPIO_Port, RGB_LED_G_Pin, (g != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(RGB_LED_B_GPIO_Port, RGB_LED_B_Pin, (b != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void Power_SetBuzzer(uint8_t on)
+{
+  HAL_GPIO_WritePin(BUZZER_ALARM_GPIO_Port, BUZZER_ALARM_Pin, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void Power_UpdateStatusLed(void)
+{
+  /* 1. 最高优先级：CAN Bus-Off 故障，红灯以 200ms 周期闪烁，蜂鸣器同步鸣响报警 */
+  if (FDCAN_IsAnyBusOff() != 0U)
+  {
+    if (((HAL_GetTick() / POWER_STATUS_LED_BUSOFF_BLINK_MS) % 2U) == 0U)
+    {
+      Power_SetRgbLed(1U, 0U, 0U); /* 红灯亮 */
+      Power_SetBuzzer(1U);         /* 蜂鸣器响 */
+    }
+    else
+    {
+      Power_SetRgbLed(0U, 0U, 0U); /* 全灭 */
+      Power_SetBuzzer(0U);         /* 蜂鸣器静音 */
+    }
+    return;
+  }
+
+  /* 非 Bus-Off 故障态，确保蜂鸣器关闭 */
+  Power_SetBuzzer(0U);
+
+  /* 2. 急停开关触发：红灯常亮报警 */
+  if (Power_IsEmergencyStopActive() != 0U)
+  {
+    Power_SetRgbLed(1U, 0U, 0U);
+    return;
+  }
+
+  /* 3. 获取双电池有效 SOC（木桶短板原则，取较低者） */
+  uint8_t hasSoc1 = FDCAN_IsBatterySocValid(1U);
+  uint8_t hasSoc2 = FDCAN_IsBatterySocValid(2U);
+  float effectiveSoc = 100.0f;
+  uint8_t hasValidSoc = 0U;
+
+  if ((hasSoc1 != 0U) && (hasSoc2 != 0U))
+  {
+    float soc1 = FDCAN_GetBatterySoc(1U);
+    float soc2 = FDCAN_GetBatterySoc(2U);
+    effectiveSoc = (soc1 < soc2) ? soc1 : soc2;
+    hasValidSoc = 1U;
+  }
+  else if (hasSoc1 != 0U)
+  {
+    effectiveSoc = FDCAN_GetBatterySoc(1U);
+    hasValidSoc = 1U;
+  }
+  else if (hasSoc2 != 0U)
+  {
+    effectiveSoc = FDCAN_GetBatterySoc(2U);
+    hasValidSoc = 1U;
+  }
+
+  /* 
+   * 4. 电源指示灯三级电量显示：
+   * - 刚上电未收到有效电量帧：默认绿灯常亮
+   * - 电量 > 50%：绿灯常亮
+   * - 20% <= 电量 <= 50%：蓝灯常亮
+   * - 电量 < 20%：红灯常亮
+   */
+  if (hasValidSoc == 0U)
+  {
+    Power_SetRgbLed(0U, 1U, 0U); /* 刚上电默认绿灯常亮 */
+  }
+  else if (effectiveSoc > POWER_STATUS_LED_SOC_HIGH_THRESHOLD)
+  {
+    Power_SetRgbLed(0U, 1U, 0U); /* 电量 > 50%：绿灯常亮 */
+  }
+  else if (effectiveSoc >= POWER_STATUS_LED_SOC_LOW_THRESHOLD)
+  {
+    Power_SetRgbLed(0U, 0U, 1U); /* 20% <= 电量 <= 50%：蓝灯常亮 */
+  }
+  else
+  {
+    Power_SetRgbLed(1U, 0U, 0U); /* 电量 < 20%：红灯常亮 */
+  }
 }
 /* USER CODE END 2 */

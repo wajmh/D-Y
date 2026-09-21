@@ -32,33 +32,62 @@ extern "C" {
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN Private defines */
-/* 电池包1 MOS 控制引脚 */
-#define BAT1_CHARGE_MOS_GPIO_Port          GPIOC
-#define BAT1_CHARGE_MOS_Pin                GPIO_PIN_12
-#define BAT1_DISCHARGE_MOS_GPIO_Port       GPIOA
-#define BAT1_DISCHARGE_MOS_Pin             GPIO_PIN_0
-#define BAT1_RECHARGE_MOS_GPIO_Port        GPIOA
-#define BAT1_RECHARGE_MOS_Pin              GPIO_PIN_4//回充
+/* USER CODE BEGIN Private defines */
+/* ==================== 电池包1 MOS 控制引脚 ==================== */
+#define BAT1_DISCHARGE_MOS_GPIO_Port       GPIOB
+#define BAT1_DISCHARGE_MOS_Pin             GPIO_PIN_6   /* PB6: 主放电 MOS */
+#define BAT1_RECHARGE_MOS_GPIO_Port        GPIOB
+#define BAT1_RECHARGE_MOS_Pin              GPIO_PIN_7   /* PB7: 回充 MOS */
 #define BAT1_PRE_DISCHARGE_MOS_GPIO_Port   GPIOB
-#define BAT1_PRE_DISCHARGE_MOS_Pin         GPIO_PIN_0//预放电
+#define BAT1_PRE_DISCHARGE_MOS_Pin         GPIO_PIN_9   /* PB9: 预放电 MOS */
 
-/* 电池包2 MOS 控制引脚 */
-#define BAT2_CHARGE_MOS_GPIO_Port          GPIOC
-#define BAT2_CHARGE_MOS_Pin                GPIO_PIN_11
-#define BAT2_DISCHARGE_MOS_GPIO_Port       GPIOA
-#define BAT2_DISCHARGE_MOS_Pin             GPIO_PIN_5
+/* ==================== 电池包2 MOS 控制引脚 ==================== */
+#define BAT2_DISCHARGE_MOS_GPIO_Port       GPIOC
+#define BAT2_DISCHARGE_MOS_Pin             GPIO_PIN_11  /* PC11: 主放电 MOS */
 #define BAT2_RECHARGE_MOS_GPIO_Port        GPIOC
-#define BAT2_RECHARGE_MOS_Pin              GPIO_PIN_4
-#define BAT2_PRE_DISCHARGE_MOS_GPIO_Port   GPIOB
-#define BAT2_PRE_DISCHARGE_MOS_Pin         GPIO_PIN_1
+#define BAT2_RECHARGE_MOS_Pin              GPIO_PIN_10  /* PC10: 回充 MOS */
+#define BAT2_PRE_DISCHARGE_MOS_GPIO_Port   GPIOC
+#define BAT2_PRE_DISCHARGE_MOS_Pin         GPIO_PIN_12  /* PC12: 预放电 MOS */
 
-/* 公共电源控制和急停输入 */
-#define BACK_EMF_ABSORB_GPIO_Port          GPIOB
-#define BACK_EMF_ABSORB_Pin                GPIO_PIN_11//反电吸收
-#define PERIPHERAL_POWER_GPIO_Port         GPIOB
-#define PERIPHERAL_POWER_Pin               GPIO_PIN_10//外设供电
+/* ==================== 充电与外设供电控制 ==================== */
+#define BAT_CHARGE_MOS_GPIO_Port           GPIOB
+#define BAT_CHARGE_MOS_Pin                 GPIO_PIN_10  /* PB10: 单路总充电控制 MOS (直通 VBUS) */
+#define PERIPHERAL_POWER_GPIO_Port         GPIOA
+#define PERIPHERAL_POWER_Pin               GPIO_PIN_5   /* PA5: 外设供电 MOS */
+
+/* 兼容旧宏定义 */
+#define BAT1_CHARGE_MOS_GPIO_Port          BAT_CHARGE_MOS_GPIO_Port
+#define BAT1_CHARGE_MOS_Pin                BAT_CHARGE_MOS_Pin
+#define BAT2_CHARGE_MOS_GPIO_Port          BAT_CHARGE_MOS_GPIO_Port
+#define BAT2_CHARGE_MOS_Pin                BAT_CHARGE_MOS_Pin
+
+/* ==================== 2路反电势吸收保护 ==================== */
+#define BACK_EMF_ABSORB_1_GPIO_Port        GPIOB
+#define BACK_EMF_ABSORB_1_Pin              GPIO_PIN_12  /* PB12: 电池1回路反电势泄放 MOS */
+#define BACK_EMF_ABSORB_2_GPIO_Port        GPIOB
+#define BACK_EMF_ABSORB_2_Pin              GPIO_PIN_11  /* PB11: 电池2回路反电势泄放 MOS */
+#define BACK_EMF_ABSORB_GPIO_Port          BACK_EMF_ABSORB_2_GPIO_Port
+#define BACK_EMF_ABSORB_Pin                BACK_EMF_ABSORB_2_Pin
+
+/* ==================== 新增：隔离 DCDC 使能控制 ==================== */
+#define DCDC_EN_12V_GPIO_Port              GPIOA
+#define DCDC_EN_12V_Pin                    GPIO_PIN_7   /* PA7: 12V 使能 */
+#define DCDC_EN_24V_GPIO_Port              GPIOC
+#define DCDC_EN_24V_Pin                    GPIO_PIN_4   /* PC4: 24V 使能 */
+
+/* ==================== 新增：三色灯与蜂鸣器控制 ==================== */
+#define RGB_LED_R_GPIO_Port                GPIOC
+#define RGB_LED_R_Pin                      GPIO_PIN_15  /* PC15: 红灯 */
+#define RGB_LED_G_GPIO_Port                GPIOC
+#define RGB_LED_G_Pin                      GPIO_PIN_2   /* PC2: 绿灯 */
+#define RGB_LED_B_GPIO_Port                GPIOC
+#define RGB_LED_B_Pin                      GPIO_PIN_14  /* PC14: 蓝灯 */
+#define BUZZER_ALARM_GPIO_Port             GPIOC
+#define BUZZER_ALARM_Pin                   GPIO_PIN_13  /* PC13: 蜂鸣器 */
+
+/* 急停输入 */
 #define EMERGENCY_STOP_GPIO_Port           GPIOD
-#define EMERGENCY_STOP_Pin                 GPIO_PIN_2//急停
+#define EMERGENCY_STOP_Pin                 GPIO_PIN_2   /* PD2: 急停输入 (来自运控板光耦) */
 
 /* 默认按高电平打开 MOS；如果硬件是低电平有效，需要改这里 */
 #define POWER_SWITCH_ON                    GPIO_PIN_SET
@@ -74,7 +103,7 @@ extern "C" {
 #define POWER_BATTERY_CAN_TIMEOUT_MS       2000U
 /* 双电池回充 MOS 切换阈值，两个电池压差超过该值时只开高电压电池回充 */
 #define POWER_RECHARGE_BALANCE_DIFF        0.10f
-/* 充电模式下双电池压差在该阈值内时双开充电 MOS */
+/* 充电模式下双电池压差在该阈值内时双开充电回路 */
 #define POWER_CHARGE_BALANCE_DIFF          0.10f
 /* 充电模式下向 CAN2 发送所选低压电池回复帧的周期 (ms) */
 #define POWER_CHARGE_REPLY_PERIOD_MS       200U
@@ -82,7 +111,11 @@ extern "C" {
 #define POWER_RECHARGE_SWITCH_TIMEOUT_MS   5U
 /* 双回充 MOS 打开后，某路电流占总电流低于该比例，认为疑似未放电 */
 #define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
-/* 电流占比异常持续时间，单位 ms */
+
+/* VBUS 泄放动作阈值：超过 83V 打开对应放电电池泄放 MOS；回落至 82V 关闭 (1V滞回防抖) */
+#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    83.0f
+#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   82.0f
+
 /* 电池物理在线判定电压阈值：低于该值判定为电池拔出/无电压 (V) */
 #define BATTERY_PHYSICAL_PRESENT_VOLTAGE   20.0f
 /* 电池异常报警状态定义 */
@@ -91,11 +124,18 @@ extern "C" {
 #define BATTERY_ALARM_STATUS_REMOVED                 0x02U /* 电池物理拔出 / 无电压 */
 #define BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE  0x03U /* BMS 明确禁止放电，对应本地放电 MOS 和回充 MOS 已关闭 */
 #define BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN       0x04U /* BMS 放电 MOS 状态未知 / 无效，对应本地路径已关闭 */
+
+/* 状态指示灯 SOC 阈值：>50% 绿灯常亮，20%~50% 蓝灯常亮，<20% 红灯常亮 */
+#define POWER_STATUS_LED_SOC_HIGH_THRESHOLD          50.0f
+#define POWER_STATUS_LED_SOC_LOW_THRESHOLD           20.0f
+/* Bus-Off 错误红灯闪烁半周期 (ms) */
+#define POWER_STATUS_LED_BUSOFF_BLINK_MS             200U
 /* USER CODE END Private defines */
 
 void MX_GPIO_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+extern volatile uint8_t bat_charge_mos_state;
 extern volatile uint8_t bat1_charge_mos_state;
 extern volatile uint8_t bat1_discharge_mos_state;
 extern volatile uint8_t bat1_recharge_mos_state;
@@ -106,6 +146,8 @@ extern volatile uint8_t bat2_recharge_mos_state;
 extern volatile uint8_t bat2_pre_discharge_mos_state;
 extern volatile uint8_t peripheral_power_state;
 extern volatile uint8_t back_emf_absorb_state;
+extern volatile uint8_t back_emf_absorb_1_state;
+extern volatile uint8_t back_emf_absorb_2_state;
 
 void Power_UpdateGpioDebugStates(void);
 void Power_AllMosOff(void);
@@ -115,11 +157,19 @@ void Power_DischargeModeTask(void);
 void Power_ExitDischargeMode(void);
 HAL_StatusTypeDef Power_EnterChargeMode(void);
 void Power_ExitChargeMode(void);
+void Power_UpdateVbusPowerRelease(void);
 GPIO_PinState Power_ReadEmergencyStop(void);
 uint8_t Power_IsEmergencyStopActive(void);
 uint8_t Power_GetBattery1AlarmStatus(void);
 uint8_t Power_GetBattery2AlarmStatus(void);
 uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex);
+
+/* 辅助外设控制 API */
+void Power_SetDcdc12V(uint8_t enable);
+void Power_SetDcdc24V(uint8_t enable);
+void Power_SetRgbLed(uint8_t r, uint8_t g, uint8_t b);
+void Power_UpdateStatusLed(void);
+void Power_SetBuzzer(uint8_t on);
 
 /* USER CODE END Prototypes */
 

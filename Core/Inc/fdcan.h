@@ -59,6 +59,8 @@ extern volatile uint32_t battery_can_forward_count;
 extern volatile uint32_t battery_can_forward_drop_count;
 extern volatile float battery1_can_sum_voltage;
 extern volatile float battery1_can_current;
+extern volatile float battery1_can_soc;
+extern volatile uint8_t battery1_can_soc_valid;
 extern volatile uint32_t battery1_can_rx_id;
 extern volatile uint32_t battery1_can_rx_count;
 extern volatile uint32_t battery1_can_status_last_rx_tick;
@@ -70,6 +72,8 @@ extern volatile uint32_t battery1_can_mos_rx_count;
 extern volatile uint32_t battery1_can_mos_last_rx_tick;
 extern volatile float battery2_can_sum_voltage;
 extern volatile float battery2_can_current;
+extern volatile float battery2_can_soc;
+extern volatile uint8_t battery2_can_soc_valid;
 extern volatile uint32_t battery2_can_rx_id;
 extern volatile uint32_t battery2_can_rx_count;
 extern volatile uint32_t battery2_can_status_last_rx_tick;
@@ -106,9 +110,12 @@ void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
 HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex);
+float FDCAN_GetBatterySoc(uint8_t batteryIndex);
+uint8_t FDCAN_IsBatterySocValid(uint8_t batteryIndex);
 
 /* Bus-Off 自动恢复接口 */
 void FDCAN_CheckAndRecoverAllBusOff(void);
+uint8_t FDCAN_IsAnyBusOff(void);
 
 /* Bus-Off 恢复统计（用于调试和遥测，volatile 确保实时性） */
 extern volatile uint32_t fdcan1_busoff_recovery_count;
