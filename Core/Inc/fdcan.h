@@ -106,12 +106,53 @@ void MX_FDCAN3_Init(void);
 #define FDCAN_CHARGE_MODE_ENTER                  0x01U
 #define FDCAN_CHARGER_CAN_TIMEOUT_MS             3000U
 
+/* 小脑声光控制接口协议定义 */
+#define FDCAN_RK_INDICATOR_CMD_ID                0x04600000U
+#define FDCAN_RK_INDICATOR_STATUS_ID             0x04600001U
+#define FDCAN_RK_INDICATOR_REPORT_PERIOD_MS      500U
+
+#define FDCAN_INDICATOR_CTRL_RGB_MASK            0x01U
+#define FDCAN_INDICATOR_CTRL_BUZZER_MASK         0x02U
+
+#define FDCAN_INDICATOR_RGB_MODE_SOLID           0x00U
+#define FDCAN_INDICATOR_RGB_MODE_BLINK           0x01U
+
+#define FDCAN_INDICATOR_BUZZER_MODE_OFF          0x00U
+#define FDCAN_INDICATOR_BUZZER_MODE_ON           0x01U
+#define FDCAN_INDICATOR_BUZZER_MODE_BEEP_ONCE    0x02U
+#define FDCAN_INDICATOR_BUZZER_MODE_BLINK        0x03U
+
+#define FDCAN_INDICATOR_DEFAULT_TIMEOUT_MS       3000U
+#define FDCAN_INDICATOR_BEEP_ONCE_DURATION_MS    200U
+
+typedef struct
+{
+  uint8_t rgbTakeover;      /* 1: 小脑接管 RGB 控制权, 0: 本地自动电量指示 */
+  uint8_t buzzerTakeover;   /* 1: 小脑接管蜂鸣器控制权, 0: 本地静音 */
+  uint8_t r;                /* 红色分量 (0/1) */
+  uint8_t g;                /* 绿色分量 (0/1) */
+  uint8_t b;                /* 蓝色分量 (0/1) */
+  uint8_t rgbMode;          /* RGB 模式: 0:常亮, 1:闪烁 */
+  uint8_t buzzerMode;       /* 蜂鸣器模式: 0:关, 1:长鸣, 2:单次短鸣(200ms), 3:周期鸣叫 */
+  uint32_t halfPeriodMs;    /* 闪烁/鸣叫半周期 (ms) */
+  uint32_t timeoutMs;       /* 安全超时时间 (ms, 0表示无限期) */
+  uint32_t lastRxTick;      /* 上次收到有效控制帧的时间戳 */
+  uint32_t beepStartTick;   /* 单次短鸣触发时间戳 */
+  uint8_t beepActive;       /* 单次短鸣进行中标志 */
+} RkIndicatorControl_t;
+
+extern volatile RkIndicatorControl_t rkIndicatorCtrl;
+
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
-HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex);
+HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex);
+#define FDCAN_SendChargeReplyToCan2 FDCAN_SendChargeReplyToCharger /* 兼容旧命名别名 */
 float FDCAN_GetBatterySoc(uint8_t batteryIndex);
 uint8_t FDCAN_IsBatterySocValid(uint8_t batteryIndex);
+uint8_t FDCAN_IsRkRgbActive(void);
+uint8_t FDCAN_IsRkBuzzerActive(void);
+HAL_StatusTypeDef FDCAN_SendIndicatorStatusToRk(uint8_t rOutput, uint8_t gOutput, uint8_t bOutput, uint8_t buzzerOutput);
 
 /* Bus-Off 自动恢复接口 */
 void FDCAN_CheckAndRecoverAllBusOff(void);

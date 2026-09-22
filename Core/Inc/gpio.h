@@ -97,8 +97,9 @@ extern "C" {
 #define POWER_ESTOP_DEBOUNCE_MS            30U
 /* 预放电等待时间，单位 ms */
 #define POWER_PRE_DISCHARGE_DELAY_MS       400U
-/* dcdc 启动延迟，单位 ms */
-#define POWER_PRE_DISCHARGE_DELAY          200U
+/* 主放电 MOS 打开后预充 MOS 延时关闭时间（重叠导通缓冲），单位 ms */
+#define POWER_PRE_DISCHARGE_OVERLAP_MS     200U
+#define POWER_PRE_DISCHARGE_DELAY          POWER_PRE_DISCHARGE_OVERLAP_MS
 /* CAN 超过该时间未收到状态帧时，认为电池通信掉线 */
 #define POWER_BATTERY_CAN_TIMEOUT_MS       2000U
 /* 双电池回充 MOS 切换阈值，两个电池压差超过该值时只开高电压电池回充 */
@@ -112,9 +113,10 @@ extern "C" {
 /* 双回充 MOS 打开后，某路电流占总电流低于该比例，认为疑似未放电 */
 #define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
 
-/* VBUS 泄放动作阈值：超过 83V 打开对应放电电池泄放 MOS；回落至 82V 关闭 (1V滞回防抖) */
-#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    83.0f
-#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   82.0f
+/* VBUS 泄放动作阈值：放电模式下超过 85V 通过 PB11 PWM (50%) 开启泄放；回落至 84V 关闭 (1V滞回防抖) */
+#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    85.0f
+#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   84.0f
+#define POWER_VBUS_RELEASE_PWM_DUTY        50U   /* PB11 TIM2_CH4 PWM 占空比 50% (ARR=99, Pulse=50) */
 
 /* 电池物理在线判定电压阈值：低于该值判定为电池拔出/无电压 (V) */
 #define BATTERY_PHYSICAL_PRESENT_VOLTAGE   20.0f
@@ -130,6 +132,8 @@ extern "C" {
 #define POWER_STATUS_LED_SOC_LOW_THRESHOLD           20.0f
 /* Bus-Off 错误红灯闪烁半周期 (ms) */
 #define POWER_STATUS_LED_BUSOFF_BLINK_MS             200U
+/* 开机自检完成就绪蜂鸣时长 (ms) */
+#define POWER_BOOT_BEEP_DURATION_MS                  200U
 /* USER CODE END Private defines */
 
 void MX_GPIO_Init(void);
@@ -148,6 +152,8 @@ extern volatile uint8_t peripheral_power_state;
 extern volatile uint8_t back_emf_absorb_state;
 extern volatile uint8_t back_emf_absorb_1_state;
 extern volatile uint8_t back_emf_absorb_2_state;
+extern volatile uint8_t dcdc_12v_state;
+extern volatile uint8_t dcdc_24v_state;
 
 void Power_UpdateGpioDebugStates(void);
 void Power_AllMosOff(void);
@@ -168,8 +174,15 @@ uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex);
 void Power_SetDcdc12V(uint8_t enable);
 void Power_SetDcdc24V(uint8_t enable);
 void Power_SetRgbLed(uint8_t r, uint8_t g, uint8_t b);
-void Power_UpdateStatusLed(void);
 void Power_SetBuzzer(uint8_t on);
+void Power_UpdateStatusIndicators(void);
+void Power_UpdateStatusLed(void);
+
+uint8_t Power_GetPhysicalR(void);
+uint8_t Power_GetPhysicalG(void);
+uint8_t Power_GetPhysicalB(void);
+uint8_t Power_GetPhysicalBuzzer(void);
+void Power_TriggerBootBeep(void);
 
 /* USER CODE END Prototypes */
 

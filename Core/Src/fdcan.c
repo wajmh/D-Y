@@ -95,6 +95,8 @@ volatile uint32_t charger_can_last_rx_tick = 0U;
 volatile uint32_t charger_can_rx_interval_ms = 0U;
 volatile uint8_t rk_charge_mode_request = 0U;
 volatile uint8_t charge_mode_active = 0U;
+volatile RkIndicatorControl_t rkIndicatorCtrl = {0};
+static uint32_t rkIndicatorReportLastTxTick = 0U;
 
 static void FDCAN_IncrementDebugCounter(volatile uint32_t *counter)
 {
@@ -368,12 +370,12 @@ static HAL_StatusTypeDef FDCAN_SendCurrentReport(uint32_t identifier, const uint
   uint32_t primask;
 
   /* 快速预检（无锁） */
-  if (fdcan3_busoff_flag != 0U)
+  if (fdcan2_busoff_flag != 0U)
   {
     return HAL_BUSY;
   }
 
-  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
+  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan2) == 0U)
   {
     return HAL_BUSY;
   }
@@ -392,12 +394,12 @@ static HAL_StatusTypeDef FDCAN_SendCurrentReport(uint32_t identifier, const uint
   /* 临界区保护：原子检查标志与入队 */
   primask = __get_PRIMASK();
   __disable_irq();
-  if (fdcan3_busoff_flag != 0U)
+  if (fdcan2_busoff_flag != 0U)
   {
     __set_PRIMASK(primask);
     return HAL_BUSY;
   }
-  status = HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, (uint8_t *)txData);
+  status = HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, (uint8_t *)txData);
   __set_PRIMASK(primask);
 
   return status;
@@ -453,12 +455,12 @@ static void FDCAN_SendChargeModeStatusToRk(uint8_t status)
   statusData[0] = status;
 
   /* 快速预检（无锁） */
-  if (fdcan3_busoff_flag != 0U)
+  if (fdcan2_busoff_flag != 0U)
   {
     return;
   }
 
-  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
+  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan2) == 0U)
   {
     return;
   }
@@ -477,12 +479,12 @@ static void FDCAN_SendChargeModeStatusToRk(uint8_t status)
   /* 临界区保护：原子检查标志与入队 */
   primask = __get_PRIMASK();
   __disable_irq();
-  if (fdcan3_busoff_flag != 0U)
+  if (fdcan2_busoff_flag != 0U)
   {
     __set_PRIMASK(primask);
     return;
   }
-  (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, statusData);
+  (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, statusData);
   __set_PRIMASK(primask);
 }
 
@@ -517,7 +519,7 @@ static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
     }
   }
 
-  if (hfdcan->Instance == FDCAN2)
+  if (hfdcan->Instance == FDCAN3)
   {
     filterConfig.FilterIndex = filterIndex;
     filterConfig.FilterID1 = FDCAN_CHARGE_MODE_CMD_ID;
@@ -541,7 +543,16 @@ static void FDCAN_ConfigRkRxFilters(void)
   filterConfig.FilterID1 = FDCAN_RK_CHARGE_MODE_CMD_ID;
   filterConfig.FilterID2 = 0x1FFFFFFFU;
 
-  if (HAL_FDCAN_ConfigFilter(&hfdcan3, &filterConfig) != HAL_OK)
+  if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  filterConfig.FilterIndex = 1U;
+  filterConfig.FilterID1 = FDCAN_RK_INDICATOR_CMD_ID;
+  filterConfig.FilterID2 = 0x1FFFFFFFU;
+
+  if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filterConfig) != HAL_OK)
   {
     Error_Handler();
   }
@@ -619,13 +630,13 @@ static void FDCAN_ForwardBatteryFrameToRk(uint8_t batteryIndex,
   }
 
   /* 快速预检（无锁） */
-  if (fdcan3_busoff_flag != 0U)
+  if (fdcan2_busoff_flag != 0U)
   {
     FDCAN_IncrementDebugCounter(&battery_can_forward_drop_count);
     return;
   }
 
-  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
+  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan2) == 0U)
   {
     FDCAN_IncrementDebugCounter(&battery_can_forward_drop_count);
     return;
@@ -645,14 +656,14 @@ static void FDCAN_ForwardBatteryFrameToRk(uint8_t batteryIndex,
   /* 临界区保护：原子检查标志与入队 */
   primask = __get_PRIMASK();
   __disable_irq();
-  if (fdcan3_busoff_flag != 0U)
+  if (fdcan2_busoff_flag != 0U)
   {
     __set_PRIMASK(primask);
     FDCAN_IncrementDebugCounter(&battery_can_forward_drop_count);
     return;
   }
 
-  if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, rxData) == HAL_OK)
+  if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, rxData) == HAL_OK)
   {
     FDCAN_IncrementDebugCounter(&battery_can_forward_count);
   }
@@ -763,7 +774,7 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
       return;
     }
 
-    if ((hfdcan->Instance == FDCAN2) &&
+    if ((hfdcan->Instance == FDCAN3) &&
         (rxHeader.IdType == FDCAN_EXTENDED_ID) &&
         (rxHeader.Identifier == FDCAN_CHARGE_MODE_CMD_ID))
     {
@@ -830,23 +841,94 @@ static void FDCAN_HandleRkChargeModeCommand(const FDCAN_RxHeaderTypeDef *rxHeade
   }
 }
 
+static void FDCAN_HandleRkIndicatorCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t rxData[])
+{
+  uint32_t now;
+  uint8_t ctrlMask;
+
+  if ((rxHeader->IdType != FDCAN_EXTENDED_ID) ||
+      (rxHeader->RxFrameType != FDCAN_DATA_FRAME) ||
+      (rxHeader->Identifier != FDCAN_RK_INDICATOR_CMD_ID) ||
+      (rxHeader->DataLength < FDCAN_DLC_BYTES_1))
+  {
+    return;
+  }
+
+  now = HAL_GetTick();
+  ctrlMask = rxData[0];
+
+  rkIndicatorCtrl.rgbTakeover = ((ctrlMask & FDCAN_INDICATOR_CTRL_RGB_MASK) != 0U) ? 1U : 0U;
+  rkIndicatorCtrl.buzzerTakeover = ((ctrlMask & FDCAN_INDICATOR_CTRL_BUZZER_MASK) != 0U) ? 1U : 0U;
+
+  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_4)
+  {
+    rkIndicatorCtrl.r = (rxData[1] != 0U) ? 1U : 0U;
+    rkIndicatorCtrl.g = (rxData[2] != 0U) ? 1U : 0U;
+    rkIndicatorCtrl.b = (rxData[3] != 0U) ? 1U : 0U;
+  }
+
+  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_5)
+  {
+    rkIndicatorCtrl.rgbMode = (rxData[4] != 0U) ? FDCAN_INDICATOR_RGB_MODE_BLINK : FDCAN_INDICATOR_RGB_MODE_SOLID;
+  }
+
+  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_6)
+  {
+    rkIndicatorCtrl.buzzerMode = rxData[5];
+    if (rkIndicatorCtrl.buzzerMode == FDCAN_INDICATOR_BUZZER_MODE_BEEP_ONCE)
+    {
+      rkIndicatorCtrl.beepStartTick = now;
+      rkIndicatorCtrl.beepActive = 1U;
+    }
+  }
+
+  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_7)
+  {
+    uint8_t halfPeriodUnits = rxData[6];
+    rkIndicatorCtrl.halfPeriodMs = (halfPeriodUnits > 0U) ? ((uint32_t)halfPeriodUnits * 50U) : 500U;
+  }
+  else
+  {
+    rkIndicatorCtrl.halfPeriodMs = 500U;
+  }
+
+  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_8)
+  {
+    uint8_t timeoutUnits = rxData[7];
+    rkIndicatorCtrl.timeoutMs = (timeoutUnits > 0U) ? ((uint32_t)timeoutUnits * 100U) : 0U;
+  }
+  else
+  {
+    rkIndicatorCtrl.timeoutMs = FDCAN_INDICATOR_DEFAULT_TIMEOUT_MS;
+  }
+
+  rkIndicatorCtrl.lastRxTick = now;
+}
+
 static void FDCAN_PollRkRx(void)
 {
   FDCAN_RxHeaderTypeDef rxHeader;
   uint8_t rxData[8];
 
-  while (HAL_FDCAN_GetRxFifoFillLevel(&hfdcan3, FDCAN_RX_FIFO0) > 0U)
+  while (HAL_FDCAN_GetRxFifoFillLevel(&hfdcan2, FDCAN_RX_FIFO0) > 0U)
   {
-    if (HAL_FDCAN_GetRxMessage(&hfdcan3, FDCAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
+    if (HAL_FDCAN_GetRxMessage(&hfdcan2, FDCAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
     {
       return;
     }
 
-    FDCAN_HandleRkChargeModeCommand(&rxHeader, rxData);
+    if (rxHeader.Identifier == FDCAN_RK_CHARGE_MODE_CMD_ID)
+    {
+      FDCAN_HandleRkChargeModeCommand(&rxHeader, rxData);
+    }
+    else if (rxHeader.Identifier == FDCAN_RK_INDICATOR_CMD_ID)
+    {
+      FDCAN_HandleRkIndicatorCommand(&rxHeader, rxData);
+    }
   }
 }
 
-HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex)
+HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex)
 {
   FDCAN_TxHeaderTypeDef txHeader;
   HAL_StatusTypeDef result = HAL_OK;
@@ -860,7 +942,7 @@ HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex)
   }
 
   /* 快速预检（无锁） */
-  if (fdcan2_busoff_flag != 0U)
+  if (fdcan3_busoff_flag != 0U)
   {
     return HAL_BUSY;
   }
@@ -874,7 +956,7 @@ HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex)
       continue;
     }
 
-    if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan2) == 0U)
+    if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
     {
       result = HAL_BUSY;
       break;
@@ -894,13 +976,13 @@ HAL_StatusTypeDef FDCAN_SendChargeReplyToCan2(uint8_t batteryIndex)
     /* 临界区保护：原子检查标志与入队 */
     primask = __get_PRIMASK();
     __disable_irq();
-    if (fdcan2_busoff_flag != 0U)
+    if (fdcan3_busoff_flag != 0U)
     {
       __set_PRIMASK(primask);
       return HAL_BUSY;
     }
 
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, frame->data) == HAL_OK)
+    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, frame->data) == HAL_OK)
     {
       sentFrameCount++;
     }
@@ -936,15 +1018,15 @@ static HAL_StatusTypeDef FDCAN_SendBatteryWakeFrame(FDCAN_HandleTypeDef *hfdcan,
     return HAL_ERROR;
   }
 
-  /* 只允许 FDCAN1/2 调用此函数（FDCAN3 用于上报，不发送唤醒帧） */
-  if ((hfdcan != &hfdcan1) && (hfdcan != &hfdcan2))
+  /* 只允许 FDCAN1/3 调用此函数（FDCAN2 用于上位机上报，不发送唤醒帧） */
+  if ((hfdcan != &hfdcan1) && (hfdcan != &hfdcan3))
   {
     return HAL_ERROR;
   }
 
   /* 快速预检（无锁） */
   if ((hfdcan == &hfdcan1 && fdcan1_busoff_flag != 0U) ||
-      (hfdcan == &hfdcan2 && fdcan2_busoff_flag != 0U))
+      (hfdcan == &hfdcan3 && fdcan3_busoff_flag != 0U))
   {
     return HAL_BUSY;
   }
@@ -969,7 +1051,7 @@ static HAL_StatusTypeDef FDCAN_SendBatteryWakeFrame(FDCAN_HandleTypeDef *hfdcan,
   primask = __get_PRIMASK();
   __disable_irq();
   if ((hfdcan == &hfdcan1 && fdcan1_busoff_flag != 0U) ||
-      (hfdcan == &hfdcan2 && fdcan2_busoff_flag != 0U))
+      (hfdcan == &hfdcan3 && fdcan3_busoff_flag != 0U))
   {
     __set_PRIMASK(primask);
     return HAL_BUSY;
@@ -988,7 +1070,7 @@ void FDCAN_BatteryCanStart(void)
   }
 
   FDCAN_ConfigBatteryRxFilters(&hfdcan1);
-  FDCAN_ConfigBatteryRxFilters(&hfdcan2);
+  FDCAN_ConfigBatteryRxFilters(&hfdcan3);
   FDCAN_ConfigRkRxFilters();
 
   if (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)
@@ -1041,7 +1123,7 @@ void FDCAN_BatteryCanTask(void)
 
   FDCAN_PollRkRx();
   FDCAN_PollBatteryRx(&hfdcan1, 1U);
-  FDCAN_PollBatteryRx(&hfdcan2, 2U);
+  FDCAN_PollBatteryRx(&hfdcan3, 2U);
 
   /* 充电桩通信超时监测：在充电激活状态下，若超过 FDCAN_CHARGER_CAN_TIMEOUT_MS（当前3000ms）未收到充电桩握手帧（拔枪或充电机断电），自动退出充电模式 */
   now = HAL_GetTick();  /* 在超时判断前刷新 now，消除与 PollBatteryRx 内部更新 charger_can_last_rx_tick 的时序下溢 */
@@ -1057,8 +1139,8 @@ void FDCAN_BatteryCanTask(void)
     }
   }
 
-  /* FDCAN3 上报统一门禁：Bus-Off 期间跳过所有向 RK 的上报，避免无效计算 */
-  if (fdcan3_busoff_flag == 0U)
+  /* RK 上报统一门禁：FDCAN2 Bus-Off 期间跳过所有向 RK 的上报，避免无效计算 */
+  if (fdcan2_busoff_flag == 0U)
   {
     if ((Power_IsEmergencyStopActive() != 0U) &&
         ((now - estopReportLastTxTick) >= FDCAN_ESTOP_REPORT_PERIOD_MS))
@@ -1142,7 +1224,16 @@ void FDCAN_BatteryCanTask(void)
       currentReportLastTxTick = now;
       FDCAN_SendCurrentReportsToRk();
     }
-  } /* 结束 FDCAN3 门禁保护块 */
+
+    if ((now - rkIndicatorReportLastTxTick) >= FDCAN_RK_INDICATOR_REPORT_PERIOD_MS)
+    {
+      rkIndicatorReportLastTxTick = now;
+      (void)FDCAN_SendIndicatorStatusToRk(Power_GetPhysicalR(),
+                                          Power_GetPhysicalG(),
+                                          Power_GetPhysicalB(),
+                                          Power_GetPhysicalBuzzer());
+    }
+  } /* 结束 RK 门禁保护块 */
 
   if ((now - batteryCanLastTxTick) < FDCAN_BATTERY_WAKE_PERIOD_MS)
   {
@@ -1151,7 +1242,7 @@ void FDCAN_BatteryCanTask(void)
 
   batteryCanLastTxTick = now;
   (void)FDCAN_SendBatteryWakeFrame(&hfdcan1, 1U);
-  (void)FDCAN_SendBatteryWakeFrame(&hfdcan2, 2U);
+  (void)FDCAN_SendBatteryWakeFrame(&hfdcan3, 2U);
 }//负责初始化接收过滤器并启动 CAN。
 
 /* Bus-Off 中断回调：仅单次读取 PSR，记录代际号，置 pending 态 */
@@ -1305,7 +1396,7 @@ void MX_FDCAN3_Init(void)
   hfdcan3.Init.DataTimeSeg1 = 1;
   hfdcan3.Init.DataTimeSeg2 = 1;
   hfdcan3.Init.StdFiltersNbr = 1;
-  hfdcan3.Init.ExtFiltersNbr = 1;
+  hfdcan3.Init.ExtFiltersNbr = 8;
   hfdcan3.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan3) != HAL_OK)
   {
@@ -1592,6 +1683,89 @@ uint8_t FDCAN_IsAnyBusOff(void)
     return 1U;
   }
   return 0U;
+}
+
+uint8_t FDCAN_IsRkRgbActive(void)
+{
+  if (rkIndicatorCtrl.rgbTakeover == 0U)
+  {
+    return 0U;
+  }
+  if (rkIndicatorCtrl.timeoutMs == 0U)
+  {
+    return 1U;
+  }
+  return ((HAL_GetTick() - rkIndicatorCtrl.lastRxTick) <= rkIndicatorCtrl.timeoutMs) ? 1U : 0U;
+}
+
+uint8_t FDCAN_IsRkBuzzerActive(void)
+{
+  if (rkIndicatorCtrl.buzzerTakeover == 0U)
+  {
+    return 0U;
+  }
+  if (rkIndicatorCtrl.timeoutMs == 0U)
+  {
+    return 1U;
+  }
+  return ((HAL_GetTick() - rkIndicatorCtrl.lastRxTick) <= rkIndicatorCtrl.timeoutMs) ? 1U : 0U;
+}
+
+HAL_StatusTypeDef FDCAN_SendIndicatorStatusToRk(uint8_t rOutput, uint8_t gOutput, uint8_t bOutput, uint8_t buzzerOutput)
+{
+  uint8_t statusData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+  uint8_t takeoverByte = 0U;
+  float minSoc = 100.0f;
+  uint8_t hasSoc = 0U;
+  uint8_t faultByte = 0U;
+
+  if (FDCAN_IsRkRgbActive() != 0U)
+  {
+    takeoverByte |= 0x01U;
+  }
+  if (FDCAN_IsRkBuzzerActive() != 0U)
+  {
+    takeoverByte |= 0x02U;
+  }
+
+  statusData[0] = takeoverByte;
+  statusData[1] = (rOutput != 0U) ? 1U : 0U;
+  statusData[2] = (gOutput != 0U) ? 1U : 0U;
+  statusData[3] = (bOutput != 0U) ? 1U : 0U;
+  statusData[4] = (buzzerOutput != 0U) ? 1U : 0U;
+
+  if (FDCAN_IsBatterySocValid(1U) != 0U)
+  {
+    minSoc = FDCAN_GetBatterySoc(1U);
+    hasSoc = 1U;
+  }
+  if (FDCAN_IsBatterySocValid(2U) != 0U)
+  {
+    float s2 = FDCAN_GetBatterySoc(2U);
+    if ((hasSoc == 0U) || (s2 < minSoc))
+    {
+      minSoc = s2;
+    }
+    hasSoc = 1U;
+  }
+  statusData[5] = (hasSoc != 0U) ? (uint8_t)(minSoc + 0.5f) : 100U;
+
+  if (FDCAN_IsAnyBusOff() != 0U)
+  {
+    faultByte |= 0x01U;
+  }
+  if (Power_IsEmergencyStopActive() != 0U)
+  {
+    faultByte |= 0x02U;
+  }
+  if ((hasSoc != 0U) && (minSoc < 20.0f))
+  {
+    faultByte |= 0x04U;
+  }
+  statusData[6] = faultByte;
+  statusData[7] = 0x00U;
+
+  return FDCAN_SendCurrentReport(FDCAN_RK_INDICATOR_STATUS_ID, statusData);
 }
 /* USER CODE END 1 */
 
