@@ -85,16 +85,21 @@ extern "C" {
 #define BUZZER_ALARM_GPIO_Port             GPIOC
 #define BUZZER_ALARM_Pin                   GPIO_PIN_13  /* PC13: 蜂鸣器 */
 
-/* 急停输入 */
+/* 急停输入（已停用，硬件未连接）
 #define EMERGENCY_STOP_GPIO_Port           GPIOD
-#define EMERGENCY_STOP_Pin                 GPIO_PIN_2   /* PD2: 急停输入 (来自运控板光耦) */
+#define EMERGENCY_STOP_Pin                 GPIO_PIN_2   // PD2: 急停输入 (来自运控板光耦)
+*/
 
 /* 默认按高电平打开 MOS；如果硬件是低电平有效，需要改这里 */
 #define POWER_SWITCH_ON                    GPIO_PIN_SET
 #define POWER_SWITCH_OFF                   GPIO_PIN_RESET
-/* 急停有效电平：如果急停低电平有效，改成 GPIO_PIN_RESET */
+/* DCDC 电源使能控制：硬件为低电平使能 (Active-Low) */
+#define POWER_DCDC_ON                      GPIO_PIN_RESET
+#define POWER_DCDC_OFF                     GPIO_PIN_SET
+/* 急停有效电平与消抖参数（已停用）
 #define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_RESET
 #define POWER_ESTOP_DEBOUNCE_MS            30U
+*/
 /* 预放电等待时间，单位 ms */
 #define POWER_PRE_DISCHARGE_DELAY_MS       400U
 /* 主放电 MOS 打开后预充 MOS 延时关闭时间（重叠导通缓冲），单位 ms */
@@ -116,7 +121,7 @@ extern "C" {
 /* VBUS 泄放动作阈值：放电模式下超过 85V 通过 PB11 PWM (50%) 开启泄放；回落至 84V 关闭 (1V滞回防抖) */
 #define POWER_VBUS_RELEASE_OPEN_VOLTAGE    85.0f
 #define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   84.0f
-#define POWER_VBUS_RELEASE_PWM_DUTY        50U   /* PB11 TIM2_CH4 PWM 占空比 50% (ARR=99, Pulse=50) */
+#define POWER_VBUS_RELEASE_PWM_DUTY        15U   /* PB11 TIM2_CH4 PWM 占空比 10% (ARR=99, Pulse=50) */
 
 /* 电池物理在线判定电压阈值：低于该值判定为电池拔出/无电压 (V) */
 #define BATTERY_PHYSICAL_PRESENT_VOLTAGE   20.0f
@@ -125,15 +130,29 @@ extern "C" {
 #define BATTERY_ALARM_STATUS_CAN_COMM_LOST           0x01U /* CAN 通信掉线；已处于放电态时保持本地路径 */
 #define BATTERY_ALARM_STATUS_REMOVED                 0x02U /* 电池物理拔出 / 无电压 */
 #define BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE  0x03U /* BMS 明确禁止放电，对应本地放电 MOS 和回充 MOS 已关闭 */
-#define BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN       0x04U /* BMS 放电 MOS 状态未知 / 无效，对应本地路径已关闭 */
+#define BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN       0x04U /* BMS 放电 MOS 状态未知 / 无效；放电态维持本地路径供电防空中断电，非放电态禁止准入 */
 
 /* 状态指示灯 SOC 阈值：>50% 绿灯常亮，20%~50% 蓝灯常亮，<20% 红灯常亮 */
 #define POWER_STATUS_LED_SOC_HIGH_THRESHOLD          50.0f
 #define POWER_STATUS_LED_SOC_LOW_THRESHOLD           20.0f
-/* Bus-Off 错误红灯闪烁半周期 (ms) */
+/* Bus-Off 错误蓝灯闪烁半周期 (ms) */
 #define POWER_STATUS_LED_BUSOFF_BLINK_MS             200U
-/* 开机自检完成就绪蜂鸣时长 (ms) */
-#define POWER_BOOT_BEEP_DURATION_MS                  200U
+/* 开机自检完成就绪蜂鸣时长 (ms)：硬件为间歇脉冲型蜂鸣器，90ms 刚好触发单次短“滴”并避免触发第二声 */
+#define POWER_BOOT_BEEP_DURATION_MS                  90U
+
+/* ==================== 稳压电源/母线泄放测试模式配置 ====================
+ * POWER_TEST_BENCH_SUPPLY_MODE:
+ * 0: 正常双电池工作模式（严格依赖电池 CAN 与 BMS 握手）
+ * 1: 稳压电源测试模式（屏蔽电池 CAN 通信检测，直接支持稳压电源测试泄放功能）
+ *
+ * POWER_TEST_SUPPLY_INPUT_CHANNEL:
+ * 1: 稳压电源接 BAT1 接口（执行预充 400ms -> 导通 BAT1 主放电 MOS 上电至 VBUS）
+ * 2: 稳压电源接 BAT2 接口（执行预充 400ms -> 导通 BAT2 主放电 MOS 上电至 VBUS）
+ * 0: 稳压电源直接接 VBUS 母线端（保持双电池 MOS 全部关断，直接进行 VBUS 采样泄放）
+ */
+#define POWER_TEST_BENCH_SUPPLY_MODE          0
+#define POWER_TEST_SUPPLY_INPUT_CHANNEL       1U
+
 /* USER CODE END Private defines */
 
 void MX_GPIO_Init(void);
@@ -164,8 +183,10 @@ void Power_ExitDischargeMode(void);
 HAL_StatusTypeDef Power_EnterChargeMode(void);
 void Power_ExitChargeMode(void);
 void Power_UpdateVbusPowerRelease(void);
+/* 急停检测函数（已停用，硬件未连接）
 GPIO_PinState Power_ReadEmergencyStop(void);
 uint8_t Power_IsEmergencyStopActive(void);
+*/
 uint8_t Power_GetBattery1AlarmStatus(void);
 uint8_t Power_GetBattery2AlarmStatus(void);
 uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex);

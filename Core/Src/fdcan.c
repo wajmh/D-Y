@@ -38,18 +38,27 @@
 #define FDCAN_BATTERY_ID_MASK        0x1FFFFF00U
 #define FDCAN_LEG_CURRENT_REPORT_ID  0x04100000U
 #define FDCAN_PERIPHERAL_CURRENT_REPORT_ID 0x04200000U
+/* [急停功能已停用]
 #define FDCAN_ESTOP_REPORT_ID        0x04300000U
+#define FDCAN_ESTOP_REPORT_PERIOD_MS 50U
+*/
 #define FDCAN_BATTERY_ALARM_REPORT_ID 0x04400000U
 #define FDCAN_CURRENT_REPORT_PERIOD_MS 200U
-#define FDCAN_ESTOP_REPORT_PERIOD_MS 50U
-#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 200U
+#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 100U
 #define FDCAN_CURRENT_REPORT_SCALE    100.0f
 #define FDCAN_BATTERY_WAKE_PERIOD_MS  2000U
+#define FDCAN_BMS_MOS_DEBOUNCE_FRAMES 3U
 
 static uint8_t batteryCanStarted = 0U;
+static uint8_t bat1AllowedDebounceCount = 0U;
+static uint8_t bat1ProhibitDebounceCount = 0U;
+static uint8_t bat1UnknownDebounceCount = 0U;
+static uint8_t bat2AllowedDebounceCount = 0U;
+static uint8_t bat2ProhibitDebounceCount = 0U;
+static uint8_t bat2UnknownDebounceCount = 0U;
 static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t currentReportLastTxTick = 0U;
-static uint32_t estopReportLastTxTick = 0U;
+/* static uint32_t estopReportLastTxTick = 0U; // [急停功能已停用] */
 static uint32_t batteryAlarmReportLastTxTick = 0U;
 
 typedef struct
@@ -423,12 +432,14 @@ static void FDCAN_SendCurrentReportsToRk(void)
   (void)FDCAN_SendCurrentReport(FDCAN_PERIPHERAL_CURRENT_REPORT_ID, peripheralCurrentData);
 }
 
+/* [急停功能已停用，硬件未连接]
 static void FDCAN_SendEmergencyStopReportToRk(void)
 {
   uint8_t estopData[8] = {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
 
   (void)FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
 }
+*/
 
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
 {
@@ -722,43 +733,128 @@ static void FDCAN_ParseBatteryStatus(uint8_t batteryIndex, uint32_t rxId, const 
   }
 }
 
-static void FDCAN_ParseBatteryMosStatus(uint8_t batteryIndex, uint32_t rxId, const uint8_t rxData[])
+static BmsDischargeMosState_t FDCAN_DebounceBmsDischargeState(
+    BmsDischargeMosState_t currentState,
+    uint8_t rawDischargeByte,
+    uint8_t *pAllowedCount,
+    uint8_t *pProhibitCount,
+    uint8_t *pUnknownCount)
 {
-  uint8_t chargeMosState = (rxData[0] != 0U) ? 1U : 0U;
-  uint8_t dischargeMosByte = rxData[1];
-  uint8_t dischargeMosState = (dischargeMosByte == 0x01U) ? 1U : 0U;
-  BmsDischargeMosState_t bmsDischargeState;
-
-  if (dischargeMosByte == 0x01U)
+  if (rawDischargeByte == 0x01U)
   {
-    bmsDischargeState = BMS_DISCHARGE_MOS_ALLOWED;
+    *pProhibitCount = 0U;
+    *pUnknownCount = 0U;
+    if (currentState == BMS_DISCHARGE_MOS_ALLOWED)
+    {
+      *pAllowedCount = FDCAN_BMS_MOS_DEBOUNCE_FRAMES;
+      return BMS_DISCHARGE_MOS_ALLOWED;
+    }
+    if (*pAllowedCount < 0xFFU)
+    {
+      (*pAllowedCount)++;
+    }
+    if (*pAllowedCount >= FDCAN_BMS_MOS_DEBOUNCE_FRAMES)
+    {
+      return BMS_DISCHARGE_MOS_ALLOWED;
+    }
   }
-  else if (dischargeMosByte == 0x00U)
+  else if (rawDischargeByte == 0x00U)
   {
-    bmsDischargeState = BMS_DISCHARGE_MOS_PROHIBITED;
+    *pAllowedCount = 0U;
+    *pUnknownCount = 0U;
+    if (currentState == BMS_DISCHARGE_MOS_PROHIBITED)
+    {
+      *pProhibitCount = FDCAN_BMS_MOS_DEBOUNCE_FRAMES;
+      return BMS_DISCHARGE_MOS_PROHIBITED;
+    }
+    if (*pProhibitCount < 0xFFU)
+    {
+      (*pProhibitCount)++;
+    }
+    if (*pProhibitCount >= FDCAN_BMS_MOS_DEBOUNCE_FRAMES)
+    {
+      return BMS_DISCHARGE_MOS_PROHIBITED;
+    }
   }
   else
   {
-    bmsDischargeState = BMS_DISCHARGE_MOS_UNKNOWN;
+    *pAllowedCount = 0U;
+    *pProhibitCount = 0U;
+    if (currentState == BMS_DISCHARGE_MOS_UNKNOWN)
+    {
+      *pUnknownCount = FDCAN_BMS_MOS_DEBOUNCE_FRAMES;
+      return BMS_DISCHARGE_MOS_UNKNOWN;
+    }
+    if (*pUnknownCount < 0xFFU)
+    {
+      (*pUnknownCount)++;
+    }
+    if (*pUnknownCount >= FDCAN_BMS_MOS_DEBOUNCE_FRAMES)
+    {
+      return BMS_DISCHARGE_MOS_UNKNOWN;
+    }
   }
+
+  /* 未达到连续消抖阈值，保持前一稳定状态，过滤单帧/双帧电磁干扰瞬态跳变 */
+  return currentState;
+}
+
+static void FDCAN_ParseBatteryMosStatus(uint8_t batteryIndex, uint32_t rxId, const uint8_t rxData[])
+{
+  uint32_t now = HAL_GetTick();
+  uint8_t chargeMosState = (rxData[0] != 0U) ? 1U : 0U;
+  uint8_t dischargeMosByte = rxData[1];
+  BmsDischargeMosState_t bmsDischargeState;
 
   if (batteryIndex == 1U)
   {
+    if ((battery1_can_mos_last_rx_tick != 0U) &&
+        ((now - battery1_can_mos_last_rx_tick) > 2000U))
+    {
+      bat1AllowedDebounceCount = 0U;
+      bat1ProhibitDebounceCount = 0U;
+      bat1UnknownDebounceCount = 0U;
+      battery1_bms_discharge_state = BMS_DISCHARGE_MOS_UNKNOWN;
+    }
+
+    bmsDischargeState = FDCAN_DebounceBmsDischargeState(
+        battery1_bms_discharge_state,
+        dischargeMosByte,
+        &bat1AllowedDebounceCount,
+        &bat1ProhibitDebounceCount,
+        &bat1UnknownDebounceCount);
+
     battery1_can_charge_mos_state = chargeMosState;
-    battery1_can_discharge_mos_state = dischargeMosState;
     battery1_bms_discharge_state = bmsDischargeState;
+    battery1_can_discharge_mos_state = (bmsDischargeState == BMS_DISCHARGE_MOS_ALLOWED) ? 1U : 0U;
     battery1_can_mos_rx_id = rxId;
     FDCAN_IncrementDebugCounter(&battery1_can_mos_rx_count);
-    battery1_can_mos_last_rx_tick = HAL_GetTick();
+    battery1_can_mos_last_rx_tick = now;
   }
   else
   {
+    if ((battery2_can_mos_last_rx_tick != 0U) &&
+        ((now - battery2_can_mos_last_rx_tick) > 2000U))
+    {
+      bat2AllowedDebounceCount = 0U;
+      bat2ProhibitDebounceCount = 0U;
+      bat2UnknownDebounceCount = 0U;
+      battery2_bms_discharge_state = BMS_DISCHARGE_MOS_UNKNOWN;
+    }
+
+    bmsDischargeState = FDCAN_DebounceBmsDischargeState(
+        battery2_bms_discharge_state,
+        dischargeMosByte,
+        &bat2AllowedDebounceCount,
+        &bat2ProhibitDebounceCount,
+        &bat2UnknownDebounceCount);
+
     battery2_can_charge_mos_state = chargeMosState;
-    battery2_can_discharge_mos_state = dischargeMosState;
     battery2_bms_discharge_state = bmsDischargeState;
+    battery2_can_discharge_mos_state = (bmsDischargeState == BMS_DISCHARGE_MOS_ALLOWED) ? 1U : 0U;
     battery2_can_mos_rx_id = rxId;
     FDCAN_IncrementDebugCounter(&battery2_can_mos_rx_count);
-    battery2_can_mos_last_rx_tick = HAL_GetTick();
+    battery2_can_mos_last_rx_tick = now;
   }
 }
 
@@ -858,7 +954,11 @@ static void FDCAN_HandleRkIndicatorCommand(const FDCAN_RxHeaderTypeDef *rxHeader
   ctrlMask = rxData[0];
 
   rkIndicatorCtrl.rgbTakeover = ((ctrlMask & FDCAN_INDICATOR_CTRL_RGB_MASK) != 0U) ? 1U : 0U;
+#if DEBUG_DISABLE_RK_BUZZER_CTRL
+  rkIndicatorCtrl.buzzerTakeover = 0U; /* 调试屏蔽：禁止小脑接管蜂鸣器 */
+#else
   rkIndicatorCtrl.buzzerTakeover = ((ctrlMask & FDCAN_INDICATOR_CTRL_BUZZER_MASK) != 0U) ? 1U : 0U;
+#endif
 
   if (rxHeader->DataLength >= FDCAN_DLC_BYTES_4)
   {
@@ -1005,6 +1105,7 @@ HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex)
   return result;
 }
 
+__attribute__((unused))
 static HAL_StatusTypeDef FDCAN_SendBatteryWakeFrame(FDCAN_HandleTypeDef *hfdcan, uint8_t marker)
 {
   FDCAN_TxHeaderTypeDef txHeader;
@@ -1094,9 +1195,15 @@ void FDCAN_BatteryCanStart(void)
   (void)HAL_FDCAN_ActivateNotification(&hfdcan3, FDCAN_IT_BUS_OFF, 0U);
 
   batteryCanStarted = 1U;
+  bat1AllowedDebounceCount = 0U;
+  bat1ProhibitDebounceCount = 0U;
+  bat1UnknownDebounceCount = 0U;
+  bat2AllowedDebounceCount = 0U;
+  bat2ProhibitDebounceCount = 0U;
+  bat2UnknownDebounceCount = 0U;
   batteryCanLastTxTick = HAL_GetTick() - FDCAN_BATTERY_WAKE_PERIOD_MS;
   currentReportLastTxTick = HAL_GetTick();
-  estopReportLastTxTick = HAL_GetTick() - FDCAN_ESTOP_REPORT_PERIOD_MS;
+  /* estopReportLastTxTick = HAL_GetTick() - FDCAN_ESTOP_REPORT_PERIOD_MS; // [急停功能已停用] */
   batteryAlarmReportLastTxTick = HAL_GetTick() - FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS;
 }//负责初始化接收过滤器并启动 CAN。
 
@@ -1142,12 +1249,14 @@ void FDCAN_BatteryCanTask(void)
   /* RK 上报统一门禁：FDCAN2 Bus-Off 期间跳过所有向 RK 的上报，避免无效计算 */
   if (fdcan2_busoff_flag == 0U)
   {
+    /* [急停功能已停用，硬件未连接]
     if ((Power_IsEmergencyStopActive() != 0U) &&
         ((now - estopReportLastTxTick) >= FDCAN_ESTOP_REPORT_PERIOD_MS))
     {
       estopReportLastTxTick = now;
       FDCAN_SendEmergencyStopReportToRk();
     }
+    */
 
     uint8_t curBat1Alarm = Power_GetBattery1AlarmStatus();
     uint8_t curBat2Alarm = Power_GetBattery2AlarmStatus();
@@ -1235,6 +1344,7 @@ void FDCAN_BatteryCanTask(void)
     }
   } /* 结束 RK 门禁保护块 */
 
+#if !POWER_TEST_BENCH_SUPPLY_MODE
   if ((now - batteryCanLastTxTick) < FDCAN_BATTERY_WAKE_PERIOD_MS)
   {
     return;
@@ -1243,6 +1353,7 @@ void FDCAN_BatteryCanTask(void)
   batteryCanLastTxTick = now;
   (void)FDCAN_SendBatteryWakeFrame(&hfdcan1, 1U);
   (void)FDCAN_SendBatteryWakeFrame(&hfdcan3, 2U);
+#endif
 }//负责初始化接收过滤器并启动 CAN。
 
 /* Bus-Off 中断回调：仅单次读取 PSR，记录代际号，置 pending 态 */
@@ -1672,6 +1783,10 @@ uint8_t FDCAN_IsBatterySocValid(uint8_t batteryIndex)
 
 uint8_t FDCAN_IsAnyBusOff(void)
 {
+#if POWER_TEST_BENCH_SUPPLY_MODE
+  /* 稳压电源测试模式下，可能未连接任何 CAN 从机节点，屏蔽 Bus-Off 报警避免指示灯闪烁 */
+  return 0U;
+#else
   if ((fdcan1_busoff_flag != 0U) || (fdcan2_busoff_flag != 0U) || (fdcan3_busoff_flag != 0U))
   {
     return 1U;
@@ -1683,6 +1798,7 @@ uint8_t FDCAN_IsAnyBusOff(void)
     return 1U;
   }
   return 0U;
+#endif
 }
 
 uint8_t FDCAN_IsRkRgbActive(void)
@@ -1700,6 +1816,9 @@ uint8_t FDCAN_IsRkRgbActive(void)
 
 uint8_t FDCAN_IsRkBuzzerActive(void)
 {
+#if DEBUG_DISABLE_RK_BUZZER_CTRL
+  return 0U; /* 调试配置：小脑控制蜂鸣器接口关闭 */
+#else
   if (rkIndicatorCtrl.buzzerTakeover == 0U)
   {
     return 0U;
@@ -1709,6 +1828,7 @@ uint8_t FDCAN_IsRkBuzzerActive(void)
     return 1U;
   }
   return ((HAL_GetTick() - rkIndicatorCtrl.lastRxTick) <= rkIndicatorCtrl.timeoutMs) ? 1U : 0U;
+#endif
 }
 
 HAL_StatusTypeDef FDCAN_SendIndicatorStatusToRk(uint8_t rOutput, uint8_t gOutput, uint8_t bOutput, uint8_t buzzerOutput)
@@ -1754,10 +1874,12 @@ HAL_StatusTypeDef FDCAN_SendIndicatorStatusToRk(uint8_t rOutput, uint8_t gOutput
   {
     faultByte |= 0x01U;
   }
+  /* [急停功能已停用，硬件未连接]
   if (Power_IsEmergencyStopActive() != 0U)
   {
     faultByte |= 0x02U;
   }
+  */
   if ((hasSoc != 0U) && (minSoc < 20.0f))
   {
     faultByte |= 0x04U;

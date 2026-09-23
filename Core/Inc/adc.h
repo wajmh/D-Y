@@ -36,7 +36,7 @@ extern ADC_HandleTypeDef hadc2;
 
 /* USER CODE BEGIN Private defines */
 
-#define ADC_REFERENCE_VOLTAGE                         3.3f
+#define ADC_REFERENCE_VOLTAGE                         3.26f
 #define ADC_MAX_RAW_VALUE                             4095.0f
 
 /* VBUS 分压电阻：R10(30k) + R9(30k) + R54(47k) = 107kΩ，R52(2kΩ) */
@@ -84,6 +84,7 @@ float ADC2_GetBattery2Voltage(void);
 
 /* 全局变量 */
 extern float vbus_voltage;
+extern uint16_t adc2_buffer[2];
 extern float peripheral_discharge_current;
 extern float battery1_voltage;
 extern float battery2_voltage;

@@ -132,14 +132,19 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_2
-                          |GPIO_PIN_4|GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12, GPIO_PIN_RESET);
+                          |GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5|GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_9, GPIO_PIN_RESET);
@@ -167,12 +172,6 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PD2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_2;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
 }
 
 /* USER CODE BEGIN 2 */
@@ -190,8 +189,8 @@ void Power_UpdateGpioDebugStates(void)
   bat2_pre_discharge_mos_state = (HAL_GPIO_ReadPin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
 
   peripheral_power_state = (HAL_GPIO_ReadPin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
-  dcdc_12v_state = (HAL_GPIO_ReadPin(DCDC_EN_12V_GPIO_Port, DCDC_EN_12V_Pin) == GPIO_PIN_SET) ? 1U : 0U;
-  dcdc_24v_state = (HAL_GPIO_ReadPin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin) == GPIO_PIN_SET) ? 1U : 0U;
+  dcdc_12v_state = (HAL_GPIO_ReadPin(DCDC_EN_12V_GPIO_Port, DCDC_EN_12V_Pin) == POWER_DCDC_ON) ? 1U : 0U;
+  dcdc_24v_state = (HAL_GPIO_ReadPin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin) == POWER_DCDC_ON) ? 1U : 0U;
   back_emf_absorb_1_state = 0U; /* PB12 未使用 */
   back_emf_absorb_2_state = (__HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_4) > 0U) ? 1U : 0U;
   back_emf_absorb_state = back_emf_absorb_2_state;
@@ -347,10 +346,12 @@ void Power_DischargeModeTask(void)
 
   /*
    * 决策电池 1 本地放电路径使能：
-   * 1. 若 BMS 明确禁放、物理拔出、或状态异常：立即禁止放电 (bat1Enable = 0)；
-   * 2. 若 CAN 正常且 BMS 明确允许放电 (bat1CanReady != 0)：在物理在位时使能放电 (bat1Enable = bat1PhysOnline)；
-   * 3. 若 CAN 通信掉线但物理在线且已处于放电态：保持放电不断动力 (bat1Enable = 1)；
-   * 4. 其余情况均不使能。
+   * 1. 若 BMS 明确禁放或物理拔出：立即禁止放电 (bat1Enable = 0)；
+   * 2. 若 BMS 状态未知/无效：若物理在线且已处于放电态，保持动力不断电 (bat1Enable = 1) 并上报报警，
+   *    避免因偶发单帧干扰导致断电摔狗；若处于未就绪态则严把准入 (bat1Enable = 0)；
+   * 3. 若 CAN 正常且 BMS 明确允许放电 (bat1CanReady != 0)：在物理在位时使能放电 (bat1Enable = bat1PhysOnline)；
+   * 4. 若 CAN 通信掉线但物理在线且已处于放电态：保持放电不断动力 (bat1Enable = 1)；
+   * 5. 其余情况均不使能。
    */
   if (battery1AlarmStatus == BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE)
   {
@@ -362,7 +363,15 @@ void Power_DischargeModeTask(void)
   }
   else if (battery1AlarmStatus == BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN)
   {
-    bat1Enable = 0U;
+    if ((bat1PhysOnline != 0U) &&
+        (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE))
+    {
+      bat1Enable = 1U;
+    }
+    else
+    {
+      bat1Enable = 0U;
+    }
   }
   else if (bat1CanReady != 0U)
   {
@@ -390,7 +399,15 @@ void Power_DischargeModeTask(void)
   }
   else if (battery2AlarmStatus == BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN)
   {
-    bat2Enable = 0U;
+    if ((bat2PhysOnline != 0U) &&
+        (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE))
+    {
+      bat2Enable = 1U;
+    }
+    else
+    {
+      bat2Enable = 0U;
+    }
   }
   else if (bat2CanReady != 0U)
   {
@@ -431,6 +448,7 @@ void Power_ExitDischargeMode(void)
 void Power_UpdateVbusPowerRelease(void)
 {
   float currentVbus = ADC_GetVbusVoltage();
+  uint8_t prevAbsorbState = back_emf_absorb_state;
 
   /*
    * 反电势吸收保护控制规则 (PB11 TIM2_CH4 PWM 50% 斩波泄放)：
@@ -441,8 +459,13 @@ void Power_UpdateVbusPowerRelease(void)
    *    或退出放电模式时，将占空比置 0 关断泄放；
    * 4. PB12 泄放回路未使用，保持关断。
    */
+#if POWER_TEST_BENCH_SUPPLY_MODE
+  /* 稳压电源测试模式：直接使能泄放判定，不受电池放电状态机限制（兼容 BAT1 输入或 VBUS 直接注电） */
+  uint8_t isDischarging = 1U;
+#else
   uint8_t isDischarging = ((battery1Control.state == POWER_BATTERY_STATE_DISCHARGE) ||
                            (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE)) ? 1U : 0U;
+#endif
 
   if (isDischarging != 0U)
   {
@@ -466,6 +489,12 @@ void Power_UpdateVbusPowerRelease(void)
 
   back_emf_absorb_1_state = 0U;
   back_emf_absorb_state = back_emf_absorb_2_state;
+
+  /* 泄放状态跳变时立即同步更新声光报警指示 */
+  if (prevAbsorbState != back_emf_absorb_state)
+  {
+    Power_UpdateStatusIndicators();
+  }
 }
 
 void Power_ModeTask(void)
@@ -589,6 +618,12 @@ void Power_ExitChargeMode(void)
 
 static uint8_t Power_IsBatteryCanPresent(uint8_t batteryIndex)
 {
+#if POWER_TEST_BENCH_SUPPLY_MODE
+  if ((POWER_TEST_SUPPLY_INPUT_CHANNEL != 0U) && (batteryIndex == POWER_TEST_SUPPLY_INPUT_CHANNEL))
+  {
+    return 1U;
+  }
+#endif
   uint32_t now = HAL_GetTick();
 
   if (batteryIndex == 1U)
@@ -708,6 +743,7 @@ void Power_TestBattery1DischargeSequence(void)
   Power_SetDcdc24V(1U);
 }//测试函数
 
+/* [急停功能已停用，硬件未连接，PD2已在CubeMX关闭]
 GPIO_PinState Power_ReadEmergencyStop(void)
 {
   return HAL_GPIO_ReadPin(EMERGENCY_STOP_GPIO_Port, EMERGENCY_STOP_Pin);
@@ -734,6 +770,7 @@ uint8_t Power_IsEmergencyStopActive(void)
 
   return (debouncedState == POWER_ESTOP_ACTIVE_STATE) ? 1U : 0U;
 }
+*/
 
 uint8_t Power_GetBattery1AlarmStatus(void)
 {
@@ -782,6 +819,12 @@ uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex)
 
 static uint8_t Power_IsBatteryCanAlive(uint8_t batteryIndex)
 {
+#if POWER_TEST_BENCH_SUPPLY_MODE
+  if ((POWER_TEST_SUPPLY_INPUT_CHANNEL != 0U) && (batteryIndex == POWER_TEST_SUPPLY_INPUT_CHANNEL))
+  {
+    return 1U;
+  }
+#endif
   uint32_t now = HAL_GetTick();
 
   if (batteryIndex == 1U)
@@ -800,12 +843,24 @@ static uint8_t Power_IsBatteryCanAlive(uint8_t batteryIndex)
 
 static uint8_t Power_IsBatteryBmsDischargeAllowed(uint8_t batteryIndex)
 {
+#if POWER_TEST_BENCH_SUPPLY_MODE
+  if ((POWER_TEST_SUPPLY_INPUT_CHANNEL != 0U) && (batteryIndex == POWER_TEST_SUPPLY_INPUT_CHANNEL))
+  {
+    return 1U;
+  }
+#endif
   BmsDischargeMosState_t state = (batteryIndex == 1U) ? battery1_bms_discharge_state : battery2_bms_discharge_state;
   return (state == BMS_DISCHARGE_MOS_ALLOWED) ? 1U : 0U;
 }
 
 static uint8_t Power_IsBatteryBmsDischargeProhibited(uint8_t batteryIndex)
 {
+#if POWER_TEST_BENCH_SUPPLY_MODE
+  if ((POWER_TEST_SUPPLY_INPUT_CHANNEL != 0U) && (batteryIndex == POWER_TEST_SUPPLY_INPUT_CHANNEL))
+  {
+    return 0U;
+  }
+#endif
   BmsDischargeMosState_t state = (batteryIndex == 1U) ? battery1_bms_discharge_state : battery2_bms_discharge_state;
   return ((Power_IsBatteryBmsMosFresh(batteryIndex) != 0U) &&
           (state == BMS_DISCHARGE_MOS_PROHIBITED)) ? 1U : 0U;
@@ -813,6 +868,12 @@ static uint8_t Power_IsBatteryBmsDischargeProhibited(uint8_t batteryIndex)
 
 static uint8_t Power_IsBatteryBmsDischargeUnknown(uint8_t batteryIndex)
 {
+#if POWER_TEST_BENCH_SUPPLY_MODE
+  if ((POWER_TEST_SUPPLY_INPUT_CHANNEL != 0U) && (batteryIndex == POWER_TEST_SUPPLY_INPUT_CHANNEL))
+  {
+    return 0U;
+  }
+#endif
   BmsDischargeMosState_t state = (batteryIndex == 1U) ? battery1_bms_discharge_state : battery2_bms_discharge_state;
   return ((Power_IsBatteryBmsMosFresh(batteryIndex) != 0U) &&
           (state == BMS_DISCHARGE_MOS_UNKNOWN)) ? 1U : 0U;
@@ -949,7 +1010,7 @@ static void Power_UpdatePeripheralPower(uint8_t battery1Present, uint8_t battery
   {
     Power_SetDcdc12V(1U);
     Power_SetDcdc24V(1U);
-    Power_TriggerBootBeep();
+    Power_TriggerBootBeep();  
   }
   else
   {
@@ -1144,12 +1205,12 @@ static void Power_UpdateRechargeMos(uint8_t battery1Ready, uint8_t battery2Ready
 
 void Power_SetDcdc12V(uint8_t enable)
 {
-  HAL_GPIO_WritePin(DCDC_EN_12V_GPIO_Port, DCDC_EN_12V_Pin, (enable != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(DCDC_EN_12V_GPIO_Port, DCDC_EN_12V_Pin, (enable != 0U) ? POWER_DCDC_ON : POWER_DCDC_OFF);
 }
 
 void Power_SetDcdc24V(uint8_t enable)
 {
-  HAL_GPIO_WritePin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin, (enable != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin, (enable != 0U) ? POWER_DCDC_ON : POWER_DCDC_OFF);
 }
 
 void Power_SetRgbLed(uint8_t r, uint8_t g, uint8_t b)
@@ -1191,18 +1252,27 @@ void Power_UpdateStatusIndicators(void)
   uint8_t outB = 0U;
   uint8_t outBuzzer = 0U;
 
-  /* 1. 最高优先级：CAN Bus-Off 故障，红灯以 500ms 周期闪烁，蜂鸣器静音关断 */
-  if (FDCAN_IsAnyBusOff() != 0U)
+  /* 1. 绝对最高安全优先级：反电势吸收泄放激活（VBUS >= 85V），强制蜂鸣器常鸣 + 红灯常亮 */
+  if (back_emf_absorb_state != 0U)
+  {
+    outR = 1U;
+    outG = 0U;
+    outB = 0U;
+    outBuzzer = 1U;
+  }
+  /* 2. 次高优先级：CAN Bus-Off 故障，蓝灯以 200ms 周期闪烁，蜂鸣器静音关断 */
+  else if (FDCAN_IsAnyBusOff() != 0U)
   {
     if (((now / POWER_STATUS_LED_BUSOFF_BLINK_MS) % 2U) == 0U)
     {
-      outR = 1U;
+      outB = 1U;
     }
+    outR = 0U;
     outG = 0U;
-    outB = 0U;
     outBuzzer = 0U;
   }
   /* 2. 次高优先级：急停开关触发，红灯常亮报警，蜂鸣器静音关断 */
+  /* [急停功能已停用，硬件未连接]
   else if (Power_IsEmergencyStopActive() != 0U)
   {
     outR = 1U;
@@ -1210,6 +1280,7 @@ void Power_UpdateStatusIndicators(void)
     outB = 0U;
     outBuzzer = 0U;
   }
+  */
   else
   {
     /* 3. RGB 控制决策 */

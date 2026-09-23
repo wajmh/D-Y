@@ -104,6 +104,8 @@ static float ADC_MedianFilterVbus(float sample,
 
 void ADC2_StartDMA(void)
 {
+    /* 启动前执行 STM32G4 逐次逼近型 ADC 硬件零点与电容自校准，消除偏置误差 */
+    HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
     HAL_ADC_Start_DMA(&hadc2, (uint32_t *)adc2_buffer, 2U);
 }
 
