@@ -106,6 +106,9 @@ static void Power_UpdateBattery2Path(uint8_t present);
 static void Power_DisableBattery1Path(void);
 static void Power_DisableBattery2Path(void);
 static void Power_UpdateRechargeMos(uint8_t battery1Ready, uint8_t battery2Ready);
+
+static uint8_t g_isHotBoot = 0U;
+static uint8_t g_hotBootBatMask = 0U;
 /* USER CODE END 0 */
 
 /*----------------------------------------------------------------------------*/
@@ -124,6 +127,11 @@ static void Power_UpdateRechargeMos(uint8_t battery1Ready, uint8_t battery2Ready
 */
 void MX_GPIO_Init(void)
 {
+  if (Power_IsHotBoot() != 0U)
+  {
+    Power_HotBootGpioInit(Power_GetHotBootBatMask());
+    return;
+  }
 
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
@@ -227,12 +235,43 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
 {
   dischargeModeEnabled = 1U;
   powerWorkMode = POWER_WORK_MODE_DISCHARGE;
-  battery1Control.state = POWER_BATTERY_STATE_OFF;
-  battery2Control.state = POWER_BATTERY_STATE_OFF;
   battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   chargeReplyBatteryIndex = 0U;
   chargeReplyLastTxTick = HAL_GetTick();
+
+  if (g_isHotBoot != 0U)
+  {
+    /* 热接力模式：跳过关断与 400ms 预充，直接接管当前已导通的放电状态 */
+    if ((g_hotBootBatMask & 0x01U) != 0U)
+    {
+      battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
+      HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+    }
+    else
+    {
+      battery1Control.state = POWER_BATTERY_STATE_OFF;
+    }
+
+    if ((g_hotBootBatMask & 0x02U) != 0U)
+    {
+      battery2Control.state = POWER_BATTERY_STATE_DISCHARGE;
+      HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+    }
+    else
+    {
+      battery2Control.state = POWER_BATTERY_STATE_OFF;
+    }
+
+    Power_SetDcdc12V(1U);
+    Power_SetDcdc24V(1U);
+    g_isHotBoot = 0U; /* 接力完成，恢复常规状态机管理 */
+  }
+  else
+  {
+    battery1Control.state = POWER_BATTERY_STATE_OFF;
+    battery2Control.state = POWER_BATTERY_STATE_OFF;
+  }
 
   Power_ModeTask();
   return HAL_OK;
@@ -1425,5 +1464,110 @@ void Power_UpdateStatusIndicators(void)
 void Power_UpdateStatusLed(void)
 {
   Power_UpdateStatusIndicators();
+}
+
+/* ==================== IAP 无缝热接力状态机与硬件控制 ==================== */
+
+void Power_CheckAndHandleHotBoot(void)
+{
+  __HAL_RCC_PWR_CLK_ENABLE();
+  HAL_PWR_EnableBkUpAccess();
+
+  uint32_t bkp1 = TAMP->BKP1R;
+  if ((bkp1 & 0xFFFF0000U) == IAP_HOT_BOOT_MAGIC)
+  {
+    g_isHotBoot = 1U;
+    g_hotBootBatMask = (uint8_t)(bkp1 & 0xFFFFU);
+    TAMP->BKP1R = 0U; /* 读取后清零热启动标志 */
+  }
+  else
+  {
+    g_isHotBoot = 0U;
+    g_hotBootBatMask = 0U;
+  }
+}
+
+uint8_t Power_IsHotBoot(void)
+{
+  return g_isHotBoot;
+}
+
+uint8_t Power_GetHotBootBatMask(void)
+{
+  return g_hotBootBatMask;
+}
+
+uint8_t Power_GetActiveDischargeMask(void)
+{
+  uint8_t mask = 0U;
+  if (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE)
+  {
+    mask |= 0x01U;
+  }
+  if (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE)
+  {
+    mask |= 0x02U;
+  }
+
+  /* 兜底：若状态机未标明 DISCHARGE，回读物理引脚电平 */
+  if (mask == 0U)
+  {
+    if (HAL_GPIO_ReadPin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON)
+    {
+      mask |= 0x01U;
+    }
+    if (HAL_GPIO_ReadPin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON)
+    {
+      mask |= 0x02U;
+    }
+  }
+
+  /* 安全兜底：如果完全未检测到，默认使能 Bat1 保障小脑供电 */
+  if (mask == 0U)
+  {
+    mask = 0x01U;
+  }
+  return mask;
+}
+
+void Power_HotBootGpioInit(uint8_t batMask)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /* 使能 GPIO 时钟 */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /* 1. 先设置输出数据寄存器 (ODR/BSRR)，确保引脚配置为输出时不出现任何电平跌落 */
+  /* GPIOC: PC4 (24V DCDC, 低使能), PC2 (绿灯, 高亮), PC11 (Bat2主放电, 高开) */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, POWER_DCDC_ON); /* 保持 24V DCDC 导通 (Active Low) */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET);  /* 恢复绿灯指示正常工作态 */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_11, ((batMask & 0x02U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /* GPIOA: PA7 (12V DCDC, 低使能), PA5 (外设供电, 关) */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, POWER_DCDC_ON); /* 保持 12V DCDC 持续不断电 (Active Low) */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+
+  /* GPIOB: PB6 (Bat1主放电, 高开), 其余关 */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, ((batMask & 0x01U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7 | GPIO_PIN_9 | GPIO_PIN_10, GPIO_PIN_RESET);
+
+  /* 2. 配置引脚为推挽输出模式 */
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+
+  GPIO_InitStruct.Pin = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15 | GPIO_PIN_2
+                        | GPIO_PIN_4 | GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_7;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_10 | GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_9;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 /* USER CODE END 2 */

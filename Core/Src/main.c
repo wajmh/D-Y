@@ -70,7 +70,9 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  SCB->VTOR = 0x08006000U;
+  __enable_irq();
+  Power_CheckAndHandleHotBoot();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -101,13 +103,16 @@ int main(void)
   /* USER CODE BEGIN 2 */
   ADC2_StartDMA();
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
-  HAL_Delay(20);
-  ADC_CalibrateCurrentOffsets();
+  if (Power_IsHotBoot() == 0U)
+  {
+    HAL_Delay(20);
+    ADC_CalibrateCurrentOffsets();
+  }
   ADC_UpdateCurrents();
   ADC2_UpdateBatteryVoltages();
   FDCAN_BatteryCanStart();
   Power_UpdateGpioDebugStates();//mos管的检测
-  Power_EnterDischargeMode();//初始化双电池状态
+  Power_EnterDischargeMode();//初始化双电池状态 (热接力时跳过预充平滑接管)
   Power_UpdateStatusIndicators();//正常上电后点亮声光指示灯（默认绿灯常亮）
 
   /* USER CODE END 2 */

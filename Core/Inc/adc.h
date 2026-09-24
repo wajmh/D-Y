@@ -53,8 +53,9 @@ void MX_ADC2_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 
-/* ADC2 DMA 采样启动与校准 */
+/* ADC2 DMA 采样启动、停止与校准 */
 void ADC2_StartDMA(void);
+void ADC2_StopDMA(void);
 void ADC_CalibrateCurrentOffsets(void);
 void ADC_CalibrateLegCurrentOffsets(void); /* 兼容旧接口名 */
 void ADC_UpdateCurrents(void);

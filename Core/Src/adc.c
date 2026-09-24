@@ -109,6 +109,11 @@ void ADC2_StartDMA(void)
     HAL_ADC_Start_DMA(&hadc2, (uint32_t *)adc2_buffer, 2U);
 }
 
+void ADC2_StopDMA(void)
+{
+    HAL_ADC_Stop_DMA(&hadc2);
+}
+
 void ADC_CalibrateCurrentOffsets(void)
 {
     uint32_t peripheralDischargeCurrentSum = 0U;

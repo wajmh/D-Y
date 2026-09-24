@@ -128,6 +128,16 @@ void MX_FDCAN3_Init(void);
 /* 调试配置开关：置 1 时完全关闭小脑对蜂鸣器/Alarm 的控制接口，方便调试 */
 #define DEBUG_DISABLE_RK_BUZZER_CTRL             1
 
+/* IAP 在线升级协议定义 */
+#define FDCAN_IAP_CMD_ID                         0x04700000U
+#define FDCAN_IAP_RESP_ID                        0x04700001U
+#define IAP_BOOT_FLAG_MAGIC                      0x55AA0000U
+#define IAP_HOT_BOOT_MAGIC                       0xAA550000U
+#define IAP_BOOT_FLAG_ADDR                       (0x2001FC00U)  /* 预留 1KB 栈空间安全裕量，防止与 MSP 栈顶碰撞 */
+
+void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData);
+void FDCAN_IAP_JumpToBootloader(void);
+
 typedef struct
 {
   uint8_t rgbTakeover;      /* 1: 小脑接管 RGB 控制权, 0: 本地自动电量指示 */

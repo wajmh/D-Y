@@ -23,6 +23,8 @@
 /* USER CODE BEGIN 0 */
 #include "adc.h"
 #include "gpio.h"
+#include "tim.h"
+#include "usart.h"
 #include <string.h>
 
 #define FDCAN_BATTERY_STATUS_ID_BASE 0x04028000U
@@ -567,6 +569,15 @@ static void FDCAN_ConfigRkRxFilters(void)
   {
     Error_Handler();
   }
+
+  filterConfig.FilterIndex = 2U;
+  filterConfig.FilterID1 = FDCAN_IAP_CMD_ID;
+  filterConfig.FilterID2 = 0x1FFFFFFFU;
+
+  if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 static uint8_t FDCAN_GetChargeReplyFrameSlot(uint32_t rxId, uint8_t *slot)
@@ -1005,6 +1016,151 @@ static void FDCAN_HandleRkIndicatorCommand(const FDCAN_RxHeaderTypeDef *rxHeader
   rkIndicatorCtrl.lastRxTick = now;
 }
 
+void FDCAN_IAP_JumpToBootloader(void)
+{
+  /* 1. 获取当前正在放电的主电池掩码 (Bit0: Bat1, Bit1: Bat2) */
+  uint8_t batMask = Power_GetActiveDischargeMask();
+
+  /* 2. 停用 ADC 采集，防止带载干扰及 DMA 悬挂中断 */
+  ADC2_StopDMA();
+
+  /* 3. 关闭反电势泄放 PWM 定时器 */
+  (void)HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_4);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0U);
+
+  /* 4. 安全关断充电、回充、预放电等高危及测试回路 */
+  HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BACK_EMF_ABSORB_1_GPIO_Port, BACK_EMF_ABSORB_1_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
+
+  /* 5. 关键保持：维持上位机 12V (PA7) 和声光 24V (PC4) 隔离 DCDC 开启 (低电平使能) */
+  Power_SetDcdc12V(1U);
+  Power_SetDcdc24V(1U);
+
+  /* 维持当前放电电池主 MOS 持续导通 (高电平使能)，保障动力母线不掉电 */
+  HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, (batMask & 0x01U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, (batMask & 0x02U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
+
+  /* 蓝灯点亮指示升级中，熄灭绿灯与红灯 */
+  HAL_GPIO_WritePin(RGB_LED_B_GPIO_Port, RGB_LED_B_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(RGB_LED_G_GPIO_Port, RGB_LED_G_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(RGB_LED_R_GPIO_Port, RGB_LED_R_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(BUZZER_ALARM_GPIO_Port, BUZZER_ALARM_Pin, GPIO_PIN_RESET);
+
+  /* 6. 停止无关通信外设 */
+  (void)HAL_FDCAN_Stop(&hfdcan1);
+  (void)HAL_FDCAN_Stop(&hfdcan3);
+  (void)HAL_UART_DeInit(&huart2);
+
+  /* 7. 停止 FDCAN2 */
+  (void)HAL_FDCAN_Stop(&hfdcan2);
+
+  /* 8. 写入 Bootloader 升级标记与放电电池掩码到 SRAM 和 RTC/TAMP 备份寄存器 */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  HAL_PWR_EnableBkUpAccess();
+  TAMP->BKP0R = (IAP_BOOT_FLAG_MAGIC & 0xFFFF0000U) | (batMask & 0xFFFFU);
+  *((volatile uint32_t *)IAP_BOOT_FLAG_ADDR) = (IAP_BOOT_FLAG_MAGIC & 0xFFFF0000U) | (batMask & 0xFFFFU);
+
+  /* 9. 检查 Bootloader 起始地址是否有效 */
+  uint32_t bootMsp = *(volatile uint32_t *)0x08000000U;
+  uint32_t resetHandlerAddr = *(volatile uint32_t *)(0x08000000U + 4U);
+
+  if ((bootMsp & 0xFFFE0000U) != 0x20000000U)
+  {
+    return;
+  }
+
+  /* 10. 禁用全局中断，防止跳转过程中产生悬挂中断 */
+  __disable_irq();
+
+  /* 11. 停止 SysTick 定时器并清空计数器 */
+  SysTick->CTRL = 0U;
+  SysTick->LOAD = 0U;
+  SysTick->VAL  = 0U;
+
+  /* 12. 清除所有 NVIC 中断使能和挂起请求 */
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    NVIC->ICER[i] = 0xFFFFFFFFU;
+    NVIC->ICPR[i] = 0xFFFFFFFFU;
+  }
+
+  /* 13. 重定位中断向量表到 Bootloader 基地址 */
+  SCB->VTOR = 0x08000000U;
+
+  /* 14. 复位特权与堆栈控制寄存器，设置主堆栈指针 (MSP) 并执行内存屏障 */
+  __set_CONTROL(0U);
+  __set_MSP(bootMsp);
+  __DSB();
+  __ISB();
+
+  /* 15. 平滑软件直接跳转至 Bootloader 入口 */
+  void (*bootEntry)(void) = (void (*)(void))resetHandlerAddr;
+  bootEntry();
+
+  while (1)
+  {
+  }
+}
+
+void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData)
+{
+  if ((rxHeader == NULL) || (rxData == NULL))
+  {
+    return;
+  }
+
+  if ((rxHeader->IdType != FDCAN_EXTENDED_ID) ||
+      (rxHeader->RxFrameType != FDCAN_DATA_FRAME) ||
+      (rxHeader->Identifier != FDCAN_IAP_CMD_ID) ||
+      (rxHeader->DataLength < FDCAN_DLC_BYTES_1))
+  {
+    return;
+  }
+
+  uint8_t cmd = rxData[0];
+  FDCAN_TxHeaderTypeDef txHeader;
+  uint8_t txData[8] = {0};
+
+  txHeader.Identifier = FDCAN_IAP_RESP_ID;
+  txHeader.IdType = FDCAN_EXTENDED_ID;
+  txHeader.TxFrameType = FDCAN_DATA_FRAME;
+  txHeader.DataLength = FDCAN_DLC_BYTES_8;
+  txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  txHeader.BitRateSwitch = FDCAN_BRS_OFF;
+  txHeader.FDFormat = FDCAN_CLASSIC_CAN;
+  txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+  txHeader.MessageMarker = 0U;
+
+  if (cmd == 0x01U) /* PING: App 在线查询 */
+  {
+    txData[0] = 0x01U;
+    txData[1] = 0x00U; /* ACK_OK */
+    txData[2] = 0x02U; /* 状态: 当前在 App 中运行 */
+    txData[3] = 0x01U; /* App 固件版本 Major */
+    txData[4] = 0x04U; /* App 固件版本 Minor */
+    txData[5] = 0x01U; /* App 固件有效 */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, txData);
+  }
+  else if (cmd == 0x02U) /* START_UPGRADE / ENTER_BOOTLOADER */
+  {
+    txData[0] = 0x02U;
+    txData[1] = 0x00U; /* ACK_OK: 收到升级请求，准备切入 Bootloader */
+    txData[2] = 0x02U; /* 标识当前从 App 响应 */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, txData);
+
+    /* 延时 20ms 确保 ACK 帧在物理 CAN 总线上发送完成 */
+    HAL_Delay(20);
+
+    /* 执行无缝热接力软件平滑跳转 */
+    FDCAN_IAP_JumpToBootloader();
+  }
+}
+
 static void FDCAN_PollRkRx(void)
 {
   FDCAN_RxHeaderTypeDef rxHeader;
@@ -1024,6 +1180,10 @@ static void FDCAN_PollRkRx(void)
     else if (rxHeader.Identifier == FDCAN_RK_INDICATOR_CMD_ID)
     {
       FDCAN_HandleRkIndicatorCommand(&rxHeader, rxData);
+    }
+    else if (rxHeader.Identifier == FDCAN_IAP_CMD_ID)
+    {
+      FDCAN_HandleIapCommand(&rxHeader, rxData);
     }
   }
 }

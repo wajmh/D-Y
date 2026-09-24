@@ -205,6 +205,13 @@ uint8_t Power_GetPhysicalB(void);
 uint8_t Power_GetPhysicalBuzzer(void);
 void Power_TriggerBootBeep(void);
 
+/* IAP 无缝热接力支持接口 */
+uint8_t Power_GetActiveDischargeMask(void);
+void Power_CheckAndHandleHotBoot(void);
+uint8_t Power_IsHotBoot(void);
+uint8_t Power_GetHotBootBatMask(void);
+void Power_HotBootGpioInit(uint8_t batMask);
+
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus
