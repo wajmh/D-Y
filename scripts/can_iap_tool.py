@@ -173,7 +173,7 @@ class CanIapUpdater:
             offset += chunk_len
             is_last = (offset >= total_len)
 
-            time.sleep(0.001)  # 1ms 微延时平滑总线流量，杜绝 MCU 3-frame RX FIFO 溢出
+            time.sleep(0.002)  # 2ms 微延时平滑总线流量，杜绝 MCU 3-frame RX FIFO 溢出
 
             # 每 16 包 (64 字节) 或传输结束时等待单片机 ACK
             if (packet_idx % 16 == 15) or is_last:
@@ -181,7 +181,22 @@ class CanIapUpdater:
                 if not resp:
                     raise RuntimeError(f"数据包第 {packet_idx} 包等待 ACK 超时！")
                 if resp[1] != ACK_OK:
-                    raise RuntimeError(f"数据包烧写失败，MCU 报错: {resp[1]}")
+                    err_msg = f"MCU 报错代码: {resp[1]}"
+                    if len(resp) >= 5:
+                        hal_status = resp[2]
+                        flash_err = resp[3] | (resp[4] << 8)
+                        err_pkt = (resp[5] << 8) | resp[6] if len(resp) >= 7 else packet_idx
+                        err_names = []
+                        if flash_err & 0x0002: err_names.append("OPERR(操作错误)")
+                        if flash_err & 0x0008: err_names.append("PROGERR(非0xFF写入/未擦除)")
+                        if flash_err & 0x0010: err_names.append("WRPERR(写保护)")
+                        if flash_err & 0x0020: err_names.append("PGAERR(对齐错误)")
+                        if flash_err & 0x0040: err_names.append("SIZERR(位宽错误)")
+                        if flash_err & 0x0080: err_names.append("PGSERR(编程时序冲突)")
+                        if flash_err & 0x4000: err_names.append("RDERR(读保护)")
+                        err_desc = ", ".join(err_names) if err_names else "无硬件错误位"
+                        err_msg += f" (HAL状态: {hal_status}, FlashError: 0x{flash_err:04X} [{err_desc}], 报错包号: {err_pkt})"
+                    raise RuntimeError(f"数据包烧写失败，{err_msg}")
 
                 # 打印进度条
                 progress = min(100.0, (offset / total_len) * 100.0)
@@ -296,8 +311,12 @@ def main():
                 sys.exit(1)
             updater.trigger_enter_bootloader()
             info = updater.ping(retries=5)
-            if not info or info[0] != ACK_OK or info[1] != 0x01:
-                print("\033[91m[!] 切换至 Bootloader 失败！\033[0m")
+            if not info:
+                print("\033[91m[!] 切换至 Bootloader 失败：单片机无应答 (超时)！\033[0m")
+                sys.exit(1)
+            if info[0] != ACK_OK or info[1] != 0x01:
+                state_str = "App" if info[1] == 0x02 else f"未知(0x{info[1]:02X})"
+                print(f"\033[91m[!] 切换至 Bootloader 失败：当前仍处于 {state_str} 模式 (ACK: 0x{info[0]:02X})！\033[0m")
                 sys.exit(1)
             ack, state, major, minor, app_valid = info
 

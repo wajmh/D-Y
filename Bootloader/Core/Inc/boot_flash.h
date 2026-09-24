@@ -25,11 +25,12 @@ extern "C" {
 
 #define BOOT_APP_MAGIC_VALID        0xA5A55A5AU
 #define BOOT_APP_MAGIC_INVALID      0xFFFFFFFFU
+#define BOOT_APP_MAGIC_ERASED       0xDEADBEEFU
 
 #pragma pack(push, 4)
 typedef struct
 {
-  uint32_t magic;       /* 固件有效标志: 0xA5A55A5A */
+  uint32_t magic;       /* 固件有效标志: 0xA5A55A5A (有效), 0xDEADBEEF (正在升级), 0xFFFFFFFF (空白/出厂) */
   uint32_t app_size;    /* 固件实际大小(字节) */
   uint32_t app_crc32;   /* 全局 CRC32 校验码 */
   uint32_t upgrade_cnt; /* 累计升级次数计数 */
@@ -39,6 +40,8 @@ typedef struct
 /* Flash 驱动函数接口 */
 HAL_StatusTypeDef Boot_Flash_Unlock(void);
 HAL_StatusTypeDef Boot_Flash_Lock(void);
+uint32_t Boot_Flash_GetPageSize(void);
+uint32_t Boot_Flash_GetPage(uint32_t address);
 HAL_StatusTypeDef Boot_Flash_ErasePages(uint32_t startPage, uint32_t pageCount);
 HAL_StatusTypeDef Boot_Flash_EraseApp(uint32_t appSize);
 HAL_StatusTypeDef Boot_Flash_WriteDoubleWord(uint32_t address, uint64_t data);

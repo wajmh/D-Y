@@ -156,7 +156,7 @@ static void Boot_CAN_HandleStartUpgrade(const uint8_t *rxData)
   g_bootState = BOOT_STATE_READY;
   g_bootForceStay = 1U;
 
-  payload[0] = 2U; /* Flash 页大小: 2KB */
+  payload[0] = (uint8_t)(Boot_Flash_GetPageSize() / 1024U); /* Flash 页大小: 2KB 或 4KB */
   payload[1] = (uint8_t)(BOOT_APP_MAX_SIZE / 1024U); /* 最大容量 104KB */
   Boot_CAN_SendResponse(BOOT_CMD_START_UPGRADE, BOOT_ACK_OK, payload, 2U);
 }
@@ -173,11 +173,14 @@ static void Boot_CAN_HandleEraseApp(const uint8_t *rxData)
   HAL_StatusTypeDef status = Boot_Flash_EraseApp(g_firmwareTotalSize);
   if (status == HAL_OK)
   {
+    /* 擦除完成后保持 Flash 解锁，为接下来的连续分包烧录做准备 */
+    Boot_Flash_Unlock();
     g_bootState = BOOT_STATE_RECEIVING;
     Boot_CAN_SendResponse(BOOT_CMD_ERASE_APP, BOOT_ACK_OK, NULL, 0U);
   }
   else
   {
+    Boot_Flash_Lock();
     Boot_CAN_SendResponse(BOOT_CMD_ERASE_APP, BOOT_ACK_ERR_ERASE, NULL, 0U);
   }
 }
@@ -214,13 +217,20 @@ static void Boot_CAN_HandleDataPacket(const uint8_t *rxData)
       uint64_t dwData = 0U;
       memcpy(&dwData, g_doubleWordBuffer, 8U);
 
-      Boot_Flash_Unlock();
       HAL_StatusTypeDef status = Boot_Flash_WriteDoubleWord(writeAddr, dwData);
-      Boot_Flash_Lock();
 
       if (status != HAL_OK)
       {
-        Boot_CAN_SendResponse(BOOT_CMD_DATA_PACKET, BOOT_ACK_ERR_WRITE, NULL, 0U);
+        uint32_t flashError = HAL_FLASH_GetError();
+        uint8_t errPayload[6];
+        errPayload[0] = (uint8_t)status;
+        errPayload[1] = (uint8_t)(flashError & 0xFFU);
+        errPayload[2] = (uint8_t)((flashError >> 8) & 0xFFU);
+        errPayload[3] = (uint8_t)(packetIdx >> 8);
+        errPayload[4] = (uint8_t)(packetIdx & 0xFFU);
+        errPayload[5] = 0U;
+        Boot_Flash_Lock();
+        Boot_CAN_SendResponse(BOOT_CMD_DATA_PACKET, BOOT_ACK_ERR_WRITE, errPayload, 6U);
         return;
       }
 
@@ -262,9 +272,7 @@ static void Boot_CAN_HandleVerifyApp(const uint8_t *rxData)
     uint64_t dwData = 0U;
     memcpy(&dwData, g_doubleWordBuffer, 8U);
 
-    Boot_Flash_Unlock();
     (void)Boot_Flash_WriteDoubleWord(writeAddr, dwData);
-    Boot_Flash_Lock();
 
     g_firmwareWrittenBytes += 8U;
     g_doubleWordByteCount = 0U;
@@ -297,6 +305,9 @@ static void Boot_CAN_HandleVerifyApp(const uint8_t *rxData)
   {
     Boot_CAN_SendResponse(BOOT_CMD_VERIFY_APP, BOOT_ACK_ERR_CRC, payload, 4U);
   }
+
+  /* 校验结束，锁定 Flash */
+  Boot_Flash_Lock();
 }
 
 static void Boot_CAN_HandleRunApp(const uint8_t *rxData)

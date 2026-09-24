@@ -1018,6 +1018,22 @@ static void FDCAN_HandleRkIndicatorCommand(const FDCAN_RxHeaderTypeDef *rxHeader
 
 void FDCAN_IAP_JumpToBootloader(void)
 {
+  /* 0. 优先检查 Bootloader 起始地址是否有效 (Bootloader Flash 区域: 0x08000000 ~ 0x08005800) */
+  uint32_t bootMsp = *(volatile uint32_t *)0x08000000U;
+  uint32_t resetHandlerAddr = *(volatile uint32_t *)(0x08000000U + 4U);
+
+  /* 检查栈顶地址是否合法 (SRAM 范围: 0x20000400 ~ 0x20020000，且 8 字节对齐) */
+  if ((bootMsp < 0x20000400U) || (bootMsp > 0x20020000U) || ((bootMsp & 0x07U) != 0U))
+  {
+    return;
+  }
+
+  /* 检查复位向量入口地址是否在 Bootloader 代码区范围内 (0x08000000 ~ 0x08005800) */
+  if ((resetHandlerAddr < 0x08000000U) || (resetHandlerAddr >= 0x08005800U))
+  {
+    return;
+  }
+
   /* 1. 获取当前正在放电的主电池掩码 (Bit0: Bat1, Bit1: Bat2) */
   uint8_t batMask = Power_GetActiveDischargeMask();
 
@@ -1065,40 +1081,42 @@ void FDCAN_IAP_JumpToBootloader(void)
   TAMP->BKP0R = (IAP_BOOT_FLAG_MAGIC & 0xFFFF0000U) | (batMask & 0xFFFFU);
   *((volatile uint32_t *)IAP_BOOT_FLAG_ADDR) = (IAP_BOOT_FLAG_MAGIC & 0xFFFF0000U) | (batMask & 0xFFFFU);
 
-  /* 9. 检查 Bootloader 起始地址是否有效 */
-  uint32_t bootMsp = *(volatile uint32_t *)0x08000000U;
-  uint32_t resetHandlerAddr = *(volatile uint32_t *)(0x08000000U + 4U);
-
-  if ((bootMsp & 0xFFFE0000U) != 0x20000000U)
-  {
-    return;
-  }
-
-  /* 10. 禁用全局中断，防止跳转过程中产生悬挂中断 */
+  /* 9. 禁用全局中断，防止跳转过程中产生悬挂中断 */
   __disable_irq();
 
-  /* 11. 停止 SysTick 定时器并清空计数器 */
+  /* 10. 停止 SysTick 定时器并清空计数器 */
   SysTick->CTRL = 0U;
   SysTick->LOAD = 0U;
   SysTick->VAL  = 0U;
 
-  /* 12. 清除所有 NVIC 中断使能和挂起请求 */
+  /* 11. 清除所有 NVIC 中断使能和挂起请求 */
   for (uint8_t i = 0; i < 8; i++)
   {
     NVIC->ICER[i] = 0xFFFFFFFFU;
     NVIC->ICPR[i] = 0xFFFFFFFFU;
   }
 
-  /* 13. 重定位中断向量表到 Bootloader 基地址 */
+  /* 12. 调用 HAL_RCC_DeInit() 将系统时钟安全回退至内部 HSI 16MHz，以便 Bootloader 干净执行 SystemClock_Config */
+  HAL_RCC_DeInit();
+
+  /* 13. 刷新并重置 Flash 预取与指令/数据缓存，防止旧指令残留导致 HardFault */
+  __HAL_FLASH_INSTRUCTION_CACHE_DISABLE();
+  __HAL_FLASH_DATA_CACHE_DISABLE();
+  __HAL_FLASH_INSTRUCTION_CACHE_RESET();
+  __HAL_FLASH_DATA_CACHE_RESET();
+  __HAL_FLASH_INSTRUCTION_CACHE_ENABLE();
+  __HAL_FLASH_DATA_CACHE_ENABLE();
+
+  /* 14. 重定位中断向量表到 Bootloader 基地址 */
   SCB->VTOR = 0x08000000U;
 
-  /* 14. 复位特权与堆栈控制寄存器，设置主堆栈指针 (MSP) 并执行内存屏障 */
+  /* 15. 复位特权与堆栈控制寄存器，设置主堆栈指针 (MSP) 并执行内存屏障 */
   __set_CONTROL(0U);
   __set_MSP(bootMsp);
   __DSB();
   __ISB();
 
-  /* 15. 平滑软件直接跳转至 Bootloader 入口 */
+  /* 16. 平滑软件直接跳转至 Bootloader 入口 */
   void (*bootEntry)(void) = (void (*)(void))resetHandlerAddr;
   bootEntry();
 

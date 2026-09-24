@@ -135,7 +135,7 @@ extern "C" {
 /* 状态指示灯 SOC 阈值：>50% 绿灯常亮，20%~50% 蓝灯常亮，<20% 红灯常亮 */
 #define POWER_STATUS_LED_SOC_HIGH_THRESHOLD          50.0f
 #define POWER_STATUS_LED_SOC_LOW_THRESHOLD           20.0f
-/* Bus-Off 错误蓝灯闪烁半周期 (ms) */
+/* Bus-Off 错误红灯闪烁半周期 (ms) */
 #define POWER_STATUS_LED_BUSOFF_BLINK_MS             200U
 /* 开机自检完成就绪蜂鸣时长 (ms)：硬件为间歇脉冲型蜂鸣器，90ms 刚好触发单次短“滴”并避免触发第二声 */
 #define POWER_BOOT_BEEP_DURATION_MS                  90U

@@ -9,9 +9,9 @@ void Boot_JumpToApp(void)
   uint32_t resetHandlerAddr;
   pFunction appEntry;
 
-  /* 检查栈顶地址是否合法 */
+  /* 检查栈顶地址是否合法 (SRAM 范围: 0x20000400 ~ 0x20020000，且 8 字节对齐) */
   appMsp = *(volatile uint32_t *)BOOT_APP_START_ADDR;
-  if ((appMsp & 0xFFFE0000U) != 0x20000000U)
+  if ((appMsp < 0x20000400U) || (appMsp > 0x20020000U) || ((appMsp & 0x07U) != 0U))
   {
     return;
   }
@@ -43,8 +43,12 @@ void Boot_JumpToApp(void)
   HAL_RCC_DeInit();
 
   /* 刷新并重置 Flash 预取与指令/数据缓存，防止旧指令残留导致 HardFault */
+  __HAL_FLASH_INSTRUCTION_CACHE_DISABLE();
+  __HAL_FLASH_DATA_CACHE_DISABLE();
   __HAL_FLASH_INSTRUCTION_CACHE_RESET();
   __HAL_FLASH_DATA_CACHE_RESET();
+  __HAL_FLASH_INSTRUCTION_CACHE_ENABLE();
+  __HAL_FLASH_DATA_CACHE_ENABLE();
 
   /* 5. 重定位中断向量表到 App 基地址 */
   SCB->VTOR = BOOT_APP_START_ADDR;

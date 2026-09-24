@@ -1299,15 +1299,15 @@ void Power_UpdateStatusIndicators(void)
     outB = 0U;
     outBuzzer = 1U;
   }
-  /* 2. 次高优先级：CAN Bus-Off 故障，蓝灯以 200ms 周期闪烁，蜂鸣器静音关断 */
+  /* 2. 次高优先级：CAN Bus-Off 故障，红灯以 200ms 周期闪烁，蜂鸣器静音关断 */
   else if (FDCAN_IsAnyBusOff() != 0U)
   {
     if (((now / POWER_STATUS_LED_BUSOFF_BLINK_MS) % 2U) == 0U)
     {
-      outB = 1U;
+      outR = 1U;
     }
-    outR = 0U;
     outG = 0U;
+    outB = 0U;
     outBuzzer = 0U;
   }
   /* 2. 次高优先级：急停开关触发，红灯常亮报警，蜂鸣器静音关断 */

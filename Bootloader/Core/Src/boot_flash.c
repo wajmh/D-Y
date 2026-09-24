@@ -34,15 +34,32 @@ HAL_StatusTypeDef Boot_Flash_Lock(void)
   return HAL_FLASH_Lock();
 }
 
+uint32_t Boot_Flash_GetPageSize(void)
+{
+#if defined(FLASH_OPTR_DBANK)
+  if (READ_BIT(FLASH->OPTR, FLASH_OPTR_DBANK) != 0U)
+  {
+    return 2048U; /* Dual-Bank 模式每页 2 KB */
+  }
+#endif
+  return 4096U;   /* Single-Bank 模式每页 4 KB */
+}
+
+uint32_t Boot_Flash_GetPage(uint32_t address)
+{
+  uint32_t pageSize = Boot_Flash_GetPageSize();
+  return (address - BOOT_FLASH_BASE_ADDR) / pageSize;
+}
+
 HAL_StatusTypeDef Boot_Flash_ErasePages(uint32_t startPage, uint32_t pageCount)
 {
   FLASH_EraseInitTypeDef eraseInit;
   uint32_t pageError = 0U;
   HAL_StatusTypeDef status = HAL_OK;
 
-  if ((startPage + pageCount) > BOOT_FLASH_TOTAL_PAGES)
+  if (pageCount == 0U)
   {
-    return HAL_ERROR;
+    return HAL_OK;
   }
 
   /* 清除之前的状态标志 */
@@ -89,7 +106,7 @@ HAL_StatusTypeDef Boot_Flash_ErasePages(uint32_t startPage, uint32_t pageCount)
   }
 #endif
 
-  /* Single-Bank 模式直接全量擦除 */
+  /* Single-Bank 模式 (每页 4KB，总共 32 页) 直接按 Bank 1 擦除 */
   eraseInit.TypeErase = FLASH_TYPEERASE_PAGES;
   eraseInit.Banks = FLASH_BANK_1;
   eraseInit.Page = startPage;
@@ -102,30 +119,33 @@ HAL_StatusTypeDef Boot_Flash_ErasePages(uint32_t startPage, uint32_t pageCount)
 HAL_StatusTypeDef Boot_Flash_EraseApp(uint32_t appSize)
 {
   HAL_StatusTypeDef status;
+  uint32_t pageSize = Boot_Flash_GetPageSize();
+  uint32_t appStartPage = Boot_Flash_GetPage(BOOT_APP_START_ADDR);
+  uint32_t infoPage = Boot_Flash_GetPage(BOOT_APP_INFO_ADDR);
   uint32_t pagesToErase;
 
   if (appSize == 0U || appSize > BOOT_APP_MAX_SIZE)
   {
-    pagesToErase = BOOT_FLASH_TOTAL_PAGES - BOOT_APP_START_PAGE; /* 全部 52 页 */
+    pagesToErase = (BOOT_APP_MAX_SIZE + pageSize - 1U) / pageSize;
   }
   else
   {
-    pagesToErase = (appSize + BOOT_FLASH_PAGE_SIZE - 1U) / BOOT_FLASH_PAGE_SIZE;
+    pagesToErase = (appSize + pageSize - 1U) / pageSize;
   }
 
   status = Boot_Flash_Unlock();
   if (status != HAL_OK) return status;
 
-  /* 1. 首先擦除元数据页 (Page 11)，使 App 有效标记失效 */
-  status = Boot_Flash_ErasePages(BOOT_APP_INFO_PAGE, 1U);
+  /* 1. 首先擦除元数据所在页，使 App 有效标记失效 */
+  status = Boot_Flash_ErasePages(infoPage, 1U);
   if (status != HAL_OK)
   {
     Boot_Flash_Lock();
     return status;
   }
 
-  /* 2. 擦除 App 固件存储区域 (Page 12 起) */
-  status = Boot_Flash_ErasePages(BOOT_APP_START_PAGE, pagesToErase);
+  /* 2. 擦除 App 固件存储区域 (根据实际页大小动态计算起始页号) */
+  status = Boot_Flash_ErasePages(appStartPage, pagesToErase);
 
   Boot_Flash_Lock();
   return status;
@@ -145,7 +165,15 @@ HAL_StatusTypeDef Boot_Flash_WriteDoubleWord(uint32_t address, uint64_t data)
 
   __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
 
-  return HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, address, data);
+  /* 关中断临界区保护，杜绝 SysTick 中断在 Flash 写入期间取指令造成 PGSERR */
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+
+  HAL_StatusTypeDef status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, address, data);
+
+  __set_PRIMASK(primask);
+
+  return status;
 }
 
 HAL_StatusTypeDef Boot_Flash_WriteBuffer(uint32_t address, const uint8_t *data, uint32_t length)
@@ -189,6 +217,7 @@ HAL_StatusTypeDef Boot_Flash_WriteAppInfo(const BootAppInfo_t *info)
 {
   HAL_StatusTypeDef status;
   uint8_t buffer[16] = {0};
+  uint32_t infoPage = Boot_Flash_GetPage(BOOT_APP_INFO_ADDR);
 
   if (info == NULL) return HAL_ERROR;
 
@@ -197,8 +226,8 @@ HAL_StatusTypeDef Boot_Flash_WriteAppInfo(const BootAppInfo_t *info)
   status = Boot_Flash_Unlock();
   if (status != HAL_OK) return status;
 
-  /* 擦除元数据页 */
-  status = Boot_Flash_ErasePages(BOOT_APP_INFO_PAGE, 1U);
+  /* 擦除元数据所在页 */
+  status = Boot_Flash_ErasePages(infoPage, 1U);
   if (status == HAL_OK)
   {
     /* 写入 16 字节 (2 个双字) */
@@ -219,9 +248,9 @@ HAL_StatusTypeDef Boot_Flash_WriteAppInfo(const BootAppInfo_t *info)
 
 uint8_t Boot_Flash_IsAppValid(void)
 {
-  /* 1. 检查栈顶指针 (SRAM 范围: 0x20000000 ~ 0x20020000，128KB SRAM) */
+  /* 1. 检查栈顶指针 (SRAM 范围: 0x20000400 ~ 0x20020000，且 8 字节对齐) */
   uint32_t appMsp = *(volatile uint32_t *)BOOT_APP_START_ADDR;
-  if ((appMsp & 0xFFFE0000U) != 0x20000000U)
+  if ((appMsp < 0x20000400U) || (appMsp > 0x20020000U) || ((appMsp & 0x07U) != 0U))
   {
     return 0U;
   }
@@ -233,13 +262,27 @@ uint8_t Boot_Flash_IsAppValid(void)
     return 0U;
   }
 
-  /* 3. 严格检查元数据标志区 (Page 11)，防止升级中途中断/掉电后误跳入残缺 App 变砖 */
+  /* 3. 检查元数据标志区 */
   BootAppInfo_t info;
   Boot_Flash_ReadAppInfo(&info);
-  if ((info.magic != BOOT_APP_MAGIC_VALID) || (info.app_size == 0U) || (info.app_size > BOOT_APP_MAX_SIZE))
+
+  /* 若经过 CAN IAP 升级校验，标志合法且大小合法 */
+  if (info.magic == BOOT_APP_MAGIC_VALID)
   {
-    return 0U;
+    if ((info.app_size == 0U) || (info.app_size > BOOT_APP_MAX_SIZE))
+    {
+      return 0U;
+    }
+    return 1U;
   }
 
-  return 1U;
+  /* 若元数据为 0xFFFFFFFF (说明用户使用烧录器/ST-Link 直接烧录了 D-Y.hex，未经 IAP 升级写入元数据) */
+  if (info.magic == BOOT_APP_MAGIC_INVALID)
+  {
+    /* 只要栈顶指针与复位向量均合法，允许跳转执行 App */
+    return 1U;
+  }
+
+  /* 若为 0xDEADBEEF 等其他无效魔数，说明处于升级中断或固件损坏状态，禁止跳转 */
+  return 0U;
 }
