@@ -140,6 +140,10 @@ extern "C" {
 /* 开机自检完成就绪蜂鸣时长 (ms)：硬件为间歇脉冲型蜂鸣器，90ms 刚好触发单次短“滴”并避免触发第二声 */
 #define POWER_BOOT_BEEP_DURATION_MS                  90U
 
+/* IAP 测试流水灯配置：置 1 启用流水灯 (红->绿->蓝 循环流动)，置 0 恢复正常 SOC 电量指示 */
+#define POWER_STATUS_LED_FLOWING_TEST_ENABLE         0U
+#define POWER_STATUS_LED_FLOWING_STEP_MS             300U /* 流水灯每步切换周期 (ms) */
+
 /* ==================== 稳压电源/母线泄放测试模式配置 ====================
  * POWER_TEST_BENCH_SUPPLY_MODE:
  * 0: 正常双电池工作模式（严格依赖电池 CAN 与 BMS 握手）

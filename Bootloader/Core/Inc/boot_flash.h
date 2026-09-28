@@ -7,20 +7,20 @@ extern "C" {
 
 #include "stm32g4xx_hal.h"
 
-/* STM32G474 Flash 扇区与内存布局宏定义 */
+/* STM32G474 Flash 扇区与内存布局宏定义 (Single-Bank 模式: 每页 4KB, 共 32 页) */
 #define BOOT_FLASH_BASE_ADDR        0x08000000U
-#define BOOT_FLASH_PAGE_SIZE        0x00000800U  /* 2048 Bytes (2 KB) */
-#define BOOT_FLASH_TOTAL_PAGES      64U
+#define BOOT_FLASH_PAGE_SIZE        0x00001000U  /* 4096 Bytes (4 KB) */
+#define BOOT_FLASH_TOTAL_PAGES      32U
 
 #define BOOT_LOADER_START_PAGE      0U
-#define BOOT_LOADER_PAGE_COUNT      11U          /* Page 0 ~ 10, 共 22KB */
+#define BOOT_LOADER_PAGE_COUNT      5U           /* Page 0 ~ 4, 共 20KB */
 
-#define BOOT_APP_INFO_PAGE          11U          /* Page 11: 0x08005800 ~ 0x08005FFF (2KB) */
-#define BOOT_APP_INFO_ADDR          0x08005800U
+#define BOOT_APP_INFO_PAGE          5U           /* Page 5: 0x08005000 ~ 0x08005FFF (4KB) */
+#define BOOT_APP_INFO_ADDR          0x08005000U
 
-#define BOOT_APP_START_PAGE         12U          /* Page 12: 0x08006000 */
+#define BOOT_APP_START_PAGE         6U           /* Page 6: 0x08006000 */
 #define BOOT_APP_START_ADDR         0x08006000U
-#define BOOT_APP_MAX_SIZE           (104U * 1024U) /* 104 KB (Page 12 ~ 63, 共 52 页) */
+#define BOOT_APP_MAX_SIZE           (104U * 1024U) /* 104 KB (Page 6 ~ 31, 共 26 页) */
 #define BOOT_APP_END_ADDR           (BOOT_APP_START_ADDR + BOOT_APP_MAX_SIZE)
 
 #define BOOT_APP_MAGIC_VALID        0xA5A55A5AU

@@ -23,24 +23,26 @@ void Boot_JumpToApp(void)
     return;
   }
 
-  /* 1. 禁用全局中断，防止跳转过程中产生悬挂中断 */
+  /* 1. 注意：热接力绝不能调用 HAL_DeInit()，因为其会强行复位 AHB2 导致 GPIO 掉电。
+   * 首先调用 HAL_RCC_DeInit() 将时钟安全回退至 HSI 16MHz，以便 App 正常执行 SystemClock_Config。
+   * (此时中断与 SysTick 尚在运行，HAL_RCC_DeInit 内部的 HAL_GetTick 超时机制可正常工作，避免死锁) */
+  HAL_RCC_DeInit();
+
+  /* 2. 彻底禁用全局中断，防止跳转过程中产生悬挂中断 */
   __disable_irq();
 
-  /* 2. 停止 SysTick 定时器并清空计数器 */
+  /* 3. 停止 SysTick 定时器并清空计数器及其中断使能 (消除 HAL_RCC_DeInit 内部 HAL_InitTick 的副作用) */
   SysTick->CTRL = 0U;
   SysTick->LOAD = 0U;
   SysTick->VAL  = 0U;
 
-  /* 3. 清除所有 NVIC 中断使能和挂起请求 */
+  /* 4. 清除 SysTick 挂起中断与所有 NVIC 中断使能和挂起请求 */
+  SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
   for (uint8_t i = 0; i < 8; i++)
   {
     NVIC->ICER[i] = 0xFFFFFFFFU;
     NVIC->ICPR[i] = 0xFFFFFFFFU;
   }
-
-  /* 4. 注意：热接力绝不能调用 HAL_DeInit()，因为其会强行复位 AHB2 导致 GPIO 掉电
-   * 调用 HAL_RCC_DeInit() 将时钟安全回退至 HSI 16MHz，以便 App 正常执行 SystemClock_Config */
-  HAL_RCC_DeInit();
 
   /* 刷新并重置 Flash 预取与指令/数据缓存，防止旧指令残留导致 HardFault */
   __HAL_FLASH_INSTRUCTION_CACHE_DISABLE();

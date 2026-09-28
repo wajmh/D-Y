@@ -144,6 +144,29 @@ HAL_StatusTypeDef Boot_Flash_EraseApp(uint32_t appSize)
     return status;
   }
 
+  /* 显式写入升级中魔数 BOOT_APP_MAGIC_ERASED (0xDEADBEEF)，确保升级中途中断绝不误判跳转 */
+  BootAppInfo_t erasingInfo;
+  memset(&erasingInfo, 0xFF, sizeof(BootAppInfo_t));
+  erasingInfo.magic = BOOT_APP_MAGIC_ERASED;
+  erasingInfo.app_size = 0U;
+  erasingInfo.app_crc32 = 0U;
+  erasingInfo.upgrade_cnt = 0U;
+
+  uint64_t dword1 = 0U, dword2 = 0U;
+  memcpy(&dword1, &erasingInfo, 8U);
+  memcpy(&dword2, ((const uint8_t *)&erasingInfo) + 8U, 8U);
+
+  status = Boot_Flash_WriteDoubleWord(BOOT_APP_INFO_ADDR, dword1);
+  if (status == HAL_OK)
+  {
+    status = Boot_Flash_WriteDoubleWord(BOOT_APP_INFO_ADDR + 8U, dword2);
+  }
+  if (status != HAL_OK)
+  {
+    Boot_Flash_Lock();
+    return status;
+  }
+
   /* 2. 擦除 App 固件存储区域 (根据实际页大小动态计算起始页号) */
   status = Boot_Flash_ErasePages(appStartPage, pagesToErase);
 
@@ -266,10 +289,15 @@ uint8_t Boot_Flash_IsAppValid(void)
   BootAppInfo_t info;
   Boot_Flash_ReadAppInfo(&info);
 
-  /* 若经过 CAN IAP 升级校验，标志合法且大小合法 */
+  /* 若经过 CAN IAP 升级校验，标志合法且大小合法，且通过全量 CRC32 严格比对 */
   if (info.magic == BOOT_APP_MAGIC_VALID)
   {
     if ((info.app_size == 0U) || (info.app_size > BOOT_APP_MAX_SIZE))
+    {
+      return 0U;
+    }
+    uint32_t actualCrc = Boot_Flash_CalculateCRC32(BOOT_APP_START_ADDR, info.app_size);
+    if (actualCrc != info.app_crc32)
     {
       return 0U;
     }

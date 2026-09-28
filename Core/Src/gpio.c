@@ -1352,6 +1352,28 @@ void Power_UpdateStatusIndicators(void)
     }
     else
     {
+#if defined(POWER_STATUS_LED_FLOWING_TEST_ENABLE) && (POWER_STATUS_LED_FLOWING_TEST_ENABLE != 0U)
+      /* IAP 测试流水灯：红 -> 绿 -> 蓝 循环流动点亮 (每 300ms 切换一次)，便于直观验证 App 固件运行 */
+      uint32_t step = (now / POWER_STATUS_LED_FLOWING_STEP_MS) % 3U;
+      if (step == 0U)
+      {
+        outR = 1U;
+        outG = 0U;
+        outB = 0U;
+      }
+      else if (step == 1U)
+      {
+        outR = 0U;
+        outG = 1U;
+        outB = 0U;
+      }
+      else
+      {
+        outR = 0U;
+        outG = 0U;
+        outB = 1U;
+      }
+#else
       /* 本地自动模式：根据电池 SOC 呈现三级电量指示 */
       uint8_t hasSoc1 = FDCAN_IsBatterySocValid(1U);
       uint8_t hasSoc2 = FDCAN_IsBatterySocValid(2U);
@@ -1392,6 +1414,7 @@ void Power_UpdateStatusIndicators(void)
       {
         outR = 1U; /* 电量 < 20%：红灯常亮 */
       }
+#endif
     }
 
     /* 4. 蜂鸣器控制决策 */
@@ -1541,9 +1564,13 @@ void Power_HotBootGpioInit(uint8_t batMask)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /* 1. 先设置输出数据寄存器 (ODR/BSRR)，确保引脚配置为输出时不出现任何电平跌落 */
-  /* GPIOC: PC4 (24V DCDC, 低使能), PC2 (绿灯, 高亮), PC11 (Bat2主放电, 高开) */
+  /* GPIOC: PC4 (24V DCDC, 低使能), PC2 (绿灯), PC11 (Bat2主放电, 高开) */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, POWER_DCDC_ON); /* 保持 24V DCDC 导通 (Active Low) */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET);  /* 恢复绿灯指示正常工作态 */
+#if defined(POWER_STATUS_LED_FLOWING_TEST_ENABLE) && (POWER_STATUS_LED_FLOWING_TEST_ENABLE != 0U)
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_RESET);  /* IAP 流水灯模式：热启动初始不常亮绿灯 */
+#else
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET);    /* 恢复绿灯指示正常工作态 */
+#endif
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_11, ((batMask & 0x02U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_RESET);
 

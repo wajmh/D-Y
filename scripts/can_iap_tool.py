@@ -156,6 +156,9 @@ class CanIapUpdater:
 
         print(f"\033[94m[*] 开始分包烧录固件 [总大小: {total_len} 字节]...\033[0m")
 
+        retries_left = 5
+        block_start_idx = 0
+
         while offset < total_len:
             chunk = fw_bytes[offset:offset + 4]
             chunk_len = len(chunk)
@@ -170,8 +173,7 @@ class CanIapUpdater:
 
             self.send_frame(pkt_data)
 
-            offset += chunk_len
-            is_last = (offset >= total_len)
+            is_last = (offset + chunk_len >= total_len)
 
             time.sleep(0.002)  # 2ms 微延时平滑总线流量，杜绝 MCU 3-frame RX FIFO 溢出
 
@@ -179,7 +181,27 @@ class CanIapUpdater:
             if (packet_idx % 16 == 15) or is_last:
                 resp = self.wait_response(CMD_DATA_PACKET, timeout=3.0)
                 if not resp:
+                    if retries_left > 0:
+                        retries_left -= 1
+                        packet_idx = block_start_idx
+                        offset = packet_idx * 4
+                        print(f"\n\033[93m[!] 等待 ACK 超时，自动回退至分块起始包号 {packet_idx} 重试 (剩余重试次数: {retries_left})...\033[0m")
+                        time.sleep(0.05)
+                        continue
                     raise RuntimeError(f"数据包第 {packet_idx} 包等待 ACK 超时！")
+
+                if resp[1] == ACK_ERR_SEQ:
+                    expected_pkt = (resp[2] << 8) | resp[3]
+                    if retries_left > 0 and expected_pkt <= (len(fw_bytes) + 3) // 4:
+                        retries_left -= 1
+                        packet_idx = expected_pkt
+                        offset = packet_idx * 4
+                        block_start_idx = (packet_idx // 16) * 16
+                        print(f"\n\033[93m[!] 偶发丢包序号同步 (MCU 期望包号: {expected_pkt})，正在自动重传 (剩余重试次数: {retries_left})...\033[0m")
+                        time.sleep(0.02)
+                        continue
+                    raise RuntimeError(f"包序号不同步，重传次数耗尽 (MCU 期望包号: {expected_pkt})")
+
                 if resp[1] != ACK_OK:
                     err_msg = f"MCU 报错代码: {resp[1]}"
                     if len(resp) >= 5:
@@ -198,19 +220,25 @@ class CanIapUpdater:
                         err_msg += f" (HAL状态: {hal_status}, FlashError: 0x{flash_err:04X} [{err_desc}], 报错包号: {err_pkt})"
                     raise RuntimeError(f"数据包烧写失败，{err_msg}")
 
+                # 本块确认成功，更新下一块起始包号并重置重试计数
+                retries_left = 5
+                block_start_idx = packet_idx + 1
+
                 # 打印进度条
-                progress = min(100.0, (offset / total_len) * 100.0)
+                cur_written = offset + chunk_len
+                progress = min(100.0, (cur_written / total_len) * 100.0)
                 elapsed = time.time() - start_time
-                speed = (offset / 1024.0) / elapsed if elapsed > 0 else 0
-                eta = (total_len - offset) / (speed * 1024.0) if speed > 0 else 0
+                speed = (cur_written / 1024.0) / elapsed if elapsed > 0 else 0
+                eta = (total_len - cur_written) / (speed * 1024.0) if speed > 0 else 0
 
                 bar_len = 30
                 filled = int(bar_len * progress / 100.0)
                 bar = '=' * filled + '>' + ' ' * (bar_len - filled - 1) if filled < bar_len else '=' * bar_len
 
-                sys.stdout.write(f"\r  进度: [{bar}] {progress:5.1f}% | 已传: {offset}/{total_len} B | 速度: {speed:5.1f} KB/s | 剩余: {eta:4.1f}s")
+                sys.stdout.write(f"\r  进度: [{bar}] {progress:5.1f}% | 已传: {cur_written}/{total_len} B | 速度: {speed:5.1f} KB/s | 剩余: {eta:4.1f}s")
                 sys.stdout.flush()
 
+            offset += chunk_len
             packet_idx += 1
 
         sys.stdout.write("\n")

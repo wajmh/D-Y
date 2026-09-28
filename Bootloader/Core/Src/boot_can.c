@@ -272,7 +272,12 @@ static void Boot_CAN_HandleVerifyApp(const uint8_t *rxData)
     uint64_t dwData = 0U;
     memcpy(&dwData, g_doubleWordBuffer, 8U);
 
-    (void)Boot_Flash_WriteDoubleWord(writeAddr, dwData);
+    if (Boot_Flash_WriteDoubleWord(writeAddr, dwData) != HAL_OK)
+    {
+      Boot_Flash_Lock();
+      Boot_CAN_SendResponse(BOOT_CMD_VERIFY_APP, BOOT_ACK_ERR_WRITE, NULL, 0U);
+      return;
+    }
 
     g_firmwareWrittenBytes += 8U;
     g_doubleWordByteCount = 0U;
@@ -296,7 +301,12 @@ static void Boot_CAN_HandleVerifyApp(const uint8_t *rxData)
     appInfo.app_crc32 = actualCrc;
     appInfo.upgrade_cnt = 1U;
 
-    Boot_Flash_WriteAppInfo(&appInfo);
+    if (Boot_Flash_WriteAppInfo(&appInfo) != HAL_OK)
+    {
+      Boot_Flash_Lock();
+      Boot_CAN_SendResponse(BOOT_CMD_VERIFY_APP, BOOT_ACK_ERR_WRITE, NULL, 0U);
+      return;
+    }
     g_bootState = BOOT_STATE_VERIFIED;
 
     Boot_CAN_SendResponse(BOOT_CMD_VERIFY_APP, BOOT_ACK_OK, payload, 4U);
@@ -319,10 +329,17 @@ static void Boot_CAN_HandleRunApp(const uint8_t *rxData)
   /* 延时 20ms 保证 ACK 送上 CAN 总线 */
   HAL_Delay(20);
 
-  /* 写入热启动魔数与当前接力电池掩码到 TAMP->BKP1R */
+  /* 写入热启动魔数与当前接力电池掩码到 TAMP->BKP1R (仅当存在有效放电接力电池时才写入，否则清零以触发冷启动预充保护) */
   __HAL_RCC_PWR_CLK_ENABLE();
   HAL_PWR_EnableBkUpAccess();
-  TAMP->BKP1R = (HOT_BOOT_MAGIC & 0xFFFF0000U) | (g_hotBootActiveBatMask & 0xFFFFU);
+  if (g_hotBootActiveBatMask != 0U)
+  {
+    TAMP->BKP1R = (HOT_BOOT_MAGIC & 0xFFFF0000U) | (g_hotBootActiveBatMask & 0xFFFFU);
+  }
+  else
+  {
+    TAMP->BKP1R = 0U;
+  }
 
   /* 停止并反初始化 FDCAN2 外设 */
   (void)HAL_FDCAN_Stop(&hfdcan2);
@@ -334,6 +351,12 @@ static void Boot_CAN_HandleRunApp(const uint8_t *rxData)
 
 void Boot_CAN_Process(void)
 {
+  /* 检查 FDCAN2 是否因总线干扰进入 Bus-Off 状态并自动自愈恢复 */
+  if ((hfdcan2.Instance->PSR & FDCAN_PSR_BO) != 0U)
+  {
+    CLEAR_BIT(hfdcan2.Instance->CCCR, FDCAN_CCCR_INIT);
+  }
+
   FDCAN_RxHeaderTypeDef rxHeader;
   uint8_t rxData[8] = {0};
 

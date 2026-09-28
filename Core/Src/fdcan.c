@@ -1018,7 +1018,7 @@ static void FDCAN_HandleRkIndicatorCommand(const FDCAN_RxHeaderTypeDef *rxHeader
 
 void FDCAN_IAP_JumpToBootloader(void)
 {
-  /* 0. 优先检查 Bootloader 起始地址是否有效 (Bootloader Flash 区域: 0x08000000 ~ 0x08005800) */
+  /* 0. 优先检查 Bootloader 起始地址是否有效 (Bootloader Flash 区域: 0x08000000 ~ 0x08005000, 20KB) */
   uint32_t bootMsp = *(volatile uint32_t *)0x08000000U;
   uint32_t resetHandlerAddr = *(volatile uint32_t *)(0x08000000U + 4U);
 
@@ -1028,8 +1028,8 @@ void FDCAN_IAP_JumpToBootloader(void)
     return;
   }
 
-  /* 检查复位向量入口地址是否在 Bootloader 代码区范围内 (0x08000000 ~ 0x08005800) */
-  if ((resetHandlerAddr < 0x08000000U) || (resetHandlerAddr >= 0x08005800U))
+  /* 检查复位向量入口地址是否在 Bootloader 代码区范围内 (0x08000000 ~ 0x08005000) */
+  if ((resetHandlerAddr < 0x08000000U) || (resetHandlerAddr >= 0x08005000U))
   {
     return;
   }
@@ -1081,23 +1081,25 @@ void FDCAN_IAP_JumpToBootloader(void)
   TAMP->BKP0R = (IAP_BOOT_FLAG_MAGIC & 0xFFFF0000U) | (batMask & 0xFFFFU);
   *((volatile uint32_t *)IAP_BOOT_FLAG_ADDR) = (IAP_BOOT_FLAG_MAGIC & 0xFFFF0000U) | (batMask & 0xFFFFU);
 
-  /* 9. 禁用全局中断，防止跳转过程中产生悬挂中断 */
+  /* 9. 调用 HAL_RCC_DeInit() 将系统时钟安全回退至内部 HSI 16MHz，以便 Bootloader 干净执行 SystemClock_Config
+   * (此时中断与 SysTick 尚在运行，HAL_RCC_DeInit 内部的 HAL_GetTick 超时机制可正常工作，避免死锁) */
+  HAL_RCC_DeInit();
+
+  /* 10. 彻底禁用全局中断，防止跳转过程中产生悬挂中断 */
   __disable_irq();
 
-  /* 10. 停止 SysTick 定时器并清空计数器 */
+  /* 11. 停止 SysTick 定时器并清空计数器及其中断使能 (消除 HAL_RCC_DeInit 内部 HAL_InitTick 的副作用) */
   SysTick->CTRL = 0U;
   SysTick->LOAD = 0U;
   SysTick->VAL  = 0U;
 
-  /* 11. 清除所有 NVIC 中断使能和挂起请求 */
+  /* 12. 清除 SysTick 挂起标志与所有 NVIC 中断使能和挂起请求 */
+  SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
   for (uint8_t i = 0; i < 8; i++)
   {
     NVIC->ICER[i] = 0xFFFFFFFFU;
     NVIC->ICPR[i] = 0xFFFFFFFFU;
   }
-
-  /* 12. 调用 HAL_RCC_DeInit() 将系统时钟安全回退至内部 HSI 16MHz，以便 Bootloader 干净执行 SystemClock_Config */
-  HAL_RCC_DeInit();
 
   /* 13. 刷新并重置 Flash 预取与指令/数据缓存，防止旧指令残留导致 HardFault */
   __HAL_FLASH_INSTRUCTION_CACHE_DISABLE();
