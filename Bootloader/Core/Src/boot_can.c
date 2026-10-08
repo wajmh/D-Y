@@ -121,11 +121,11 @@ static void Boot_CAN_HandlePing(const uint8_t *rxData)
   uint8_t payload[6] = {0};
 
   payload[0] = 0x01U; /* 当前处于 Bootloader 运行态 */
-  payload[1] = 0x01U; /* Bootloader Major Version */
-  payload[2] = 0x00U; /* Bootloader Minor Version */
-  payload[3] = Boot_Flash_IsAppValid() ? 0x01U : 0x00U; /* App 固件有效状态 */
-  payload[4] = 0x00U;
-  payload[5] = 0x00U;
+  payload[1] = BOOT_FW_VERSION_MAJOR; /* Bootloader Major Version */
+  payload[2] = BOOT_FW_VERSION_MINOR; /* Bootloader Minor Version */
+  payload[3] = BOOT_FW_VERSION_PATCH; /* Bootloader Patch Version */
+  payload[4] = Boot_Flash_IsAppValid() ? 0x01U : 0x00U; /* App 固件有效状态 */
+  payload[5] = 0x00U; /* 保留 */
 
   g_bootForceStay = 1U;
   Boot_CAN_SendResponse(BOOT_CMD_PING, BOOT_ACK_OK, payload, sizeof(payload));

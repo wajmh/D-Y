@@ -122,6 +122,7 @@ static void FDCAN_IncrementDebugCounter(volatile uint32_t *counter)
  * ========================================================================== */
 #define FDCAN_BUSOFF_RECOVERY_DELAY_MS 100U   /* 恢复延迟，等待总线稳定 */
 #define FDCAN_BUSOFF_RECOVERY_TIMEOUT_MS 10U  /* 硬件操作超时（CCCR.INIT 响应） */
+#define FDCAN_BUSOFF_BACKUP_POLL_MS 100U      /* IDLE 兜底轮询周期（防中断丢失，限制 PSR 访问频率） */
 
 typedef enum
 {
@@ -186,24 +187,28 @@ static void FDCAN_HandleInstanceBusOff(
   localState = *state;
   __set_PRIMASK(primask);
 
-  /* 兜底检测（防御中断丢失） */
+  /* 兜底检测（防御中断丢失，限制轮询频率避免持续清零 PSR.LEC） */
   if ((localFlag == 0U) && (localState == FDCAN_BUSOFF_STATE_IDLE))
   {
-    uint32_t psr_snapshot = instance->PSR;
-    if ((psr_snapshot & FDCAN_PSR_BO) != 0U)
+    if ((now - localStateTick) >= FDCAN_BUSOFF_BACKUP_POLL_MS)
     {
-      primask = __get_PRIMASK();
-      __disable_irq();
-      if (*busoffFlag == 0U)
+      *stateTick = now;
+      uint32_t psr_snapshot = instance->PSR;
+      if ((psr_snapshot & FDCAN_PSR_BO) != 0U)
       {
-        (*generation)++;
-        *busoffFlag = 1U;
-        *detectTick = now;
-        *state = FDCAN_BUSOFF_STATE_PENDING;
-        if (diagPsr != NULL) *diagPsr = psr_snapshot;
-        if (diagEcr != NULL) *diagEcr = instance->ECR;
+        primask = __get_PRIMASK();
+        __disable_irq();
+        if (*busoffFlag == 0U)
+        {
+          (*generation)++;
+          *busoffFlag = 1U;
+          *detectTick = now;
+          *state = FDCAN_BUSOFF_STATE_PENDING;
+          if (diagPsr != NULL) *diagPsr = psr_snapshot;
+          if (diagEcr != NULL) *diagEcr = instance->ECR;
+        }
+        __set_PRIMASK(primask);
       }
-      __set_PRIMASK(primask);
     }
     return;
   }
@@ -223,6 +228,7 @@ static void FDCAN_HandleInstanceBusOff(
           hfdcan->LatestTxFifoQRequest = 0U;
           *busoffFlag = 0U;
           *state = FDCAN_BUSOFF_STATE_IDLE;
+          *stateTick = now;
           FDCAN_IncrementDebugCounter(recoveryCount);
         }
         __set_PRIMASK(primask);
@@ -268,10 +274,13 @@ static void FDCAN_HandleInstanceBusOff(
       {
         primask = __get_PRIMASK();
         __disable_irq();
-        *detectTick = now;
-        *state = FDCAN_BUSOFF_STATE_PENDING;
+        if (*generation == localGen)
+        {
+          *detectTick = now;
+          *state = FDCAN_BUSOFF_STATE_PENDING;
+          FDCAN_IncrementDebugCounter(recoveryFailCount);
+        }
         __set_PRIMASK(primask);
-        FDCAN_IncrementDebugCounter(recoveryFailCount);
       }
       break;
 
@@ -291,10 +300,13 @@ static void FDCAN_HandleInstanceBusOff(
       {
         primask = __get_PRIMASK();
         __disable_irq();
-        *detectTick = now;
-        *state = FDCAN_BUSOFF_STATE_PENDING;
+        if (*generation == localGen)
+        {
+          *detectTick = now;
+          *state = FDCAN_BUSOFF_STATE_PENDING;
+          FDCAN_IncrementDebugCounter(recoveryFailCount);
+        }
         __set_PRIMASK(primask);
-        FDCAN_IncrementDebugCounter(recoveryFailCount);
       }
       break;
 
@@ -313,6 +325,7 @@ static void FDCAN_HandleInstanceBusOff(
             hfdcan->LatestTxFifoQRequest = 0U;
             *busoffFlag = 0U;
             *state = FDCAN_BUSOFF_STATE_IDLE;
+            *stateTick = now;
             FDCAN_IncrementDebugCounter(recoveryCount);
           }
           __set_PRIMASK(primask);
@@ -322,6 +335,7 @@ static void FDCAN_HandleInstanceBusOff(
 
     default:
       *state = FDCAN_BUSOFF_STATE_IDLE;
+      *stateTick = now;
       break;
   }
 }
@@ -1161,9 +1175,11 @@ void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t
     txData[0] = 0x01U;
     txData[1] = 0x00U; /* ACK_OK */
     txData[2] = 0x02U; /* 状态: 当前在 App 中运行 */
-    txData[3] = 0x01U; /* App 固件版本 Major */
-    txData[4] = 0x04U; /* App 固件版本 Minor */
-    txData[5] = 0x01U; /* App 固件有效 */
+    txData[3] = APP_FW_VERSION_MAJOR; /* App 固件版本 Major */
+    txData[4] = APP_FW_VERSION_MINOR; /* App 固件版本 Minor */
+    txData[5] = APP_FW_VERSION_PATCH; /* App 固件版本 Patch */
+    txData[6] = 0x01U; /* App 固件有效状态 (当前正在 App 中运行) */
+    txData[7] = 0x00U; /* 保留 */
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, txData);
   }
   else if (cmd == 0x02U) /* START_UPGRADE / ENTER_BOOTLOADER */
@@ -1398,6 +1414,7 @@ void FDCAN_BatteryCanTask(void)
   static uint8_t prevBat2RechargeMos = 0U;
   static uint8_t prevBat2ChargeMos = 0U;
   static uint8_t alarmClearBurstRemaining = 0U;
+  static uint8_t mosChangedPending = 0U;
 
   uint32_t now;
 
@@ -1451,6 +1468,11 @@ void FDCAN_BatteryCanTask(void)
                           (bat2_recharge_mos_state != prevBat2RechargeMos) ||
                           (bat2_charge_mos_state != prevBat2ChargeMos)) ? 1U : 0U;
 
+    if (mosChanged != 0U)
+    {
+      mosChangedPending = 1U;
+    }
+
     /* 检测是否从有报警恢复到全正常 */
     if ((hasAlarm == 0U) &&
         ((prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
@@ -1468,13 +1490,30 @@ void FDCAN_BatteryCanTask(void)
     prevBat2RechargeMos = bat2_recharge_mos_state;
     prevBat2ChargeMos = bat2_charge_mos_state;
 
-    if (hasAlarm != 0U)
+    /* 
+     * 状态上报优先级决策：
+     * 1. 最高优先级：mosChangedPending 激活（本地 MOS 状态发生开/关动作），
+     *    立即触发发送，不受报警限速或心跳周期延缓；若遇 Tx FIFO 满返回 HAL_BUSY 则保持挂起重试，杜绝事件丢失；
+     * 2. 次高优先级：hasAlarm != 0（存在电池异常报警），按 200ms 周期高频刷新上报；
+     * 3. 第三优先级：alarmClearBurstRemaining > 0（刚从异常恢复正常），按 200ms 周期突发连续确认；
+     * 4. 最低优先级：正常状态下按 1000ms 心跳周期低频保活上报。
+     */
+    if (mosChangedPending != 0U)
+    {
+      if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
+      {
+        batteryAlarmReportLastTxTick = now;
+        mosChangedPending = 0U;
+      }
+    }
+    else if (hasAlarm != 0U)
     {
       if ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS)
       {
         if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
         {
           batteryAlarmReportLastTxTick = now;
+          mosChangedPending = 0U;
         }
       }
     }
@@ -1486,15 +1525,8 @@ void FDCAN_BatteryCanTask(void)
         {
           batteryAlarmReportLastTxTick = now;
           alarmClearBurstRemaining--;
+          mosChangedPending = 0U;
         }
-      }
-    }
-    else if (mosChanged != 0U)
-    {
-      /* MOS 状态发生开/关动作时，立即触发发送，无需等待 100ms 计时 */
-      if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
-      {
-        batteryAlarmReportLastTxTick = now;
       }
     }
     else
@@ -1504,6 +1536,7 @@ void FDCAN_BatteryCanTask(void)
         if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
         {
           batteryAlarmReportLastTxTick = now;
+          mosChangedPending = 0U;
         }
       }
     }

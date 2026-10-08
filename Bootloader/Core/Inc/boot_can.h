@@ -10,6 +10,11 @@ extern "C" {
 #define BOOT_CAN_CMD_ID             0x04700000U
 #define BOOT_CAN_RESP_ID            0x04700001U
 
+/* Bootloader 固件版本号定义 (三位版本: Major.Minor.Patch，例如 v1.0.0) */
+#define BOOT_FW_VERSION_MAJOR       1U
+#define BOOT_FW_VERSION_MINOR       0U
+#define BOOT_FW_VERSION_PATCH       0U
+
 #define BOOT_CMD_PING               0x01U
 #define BOOT_CMD_START_UPGRADE      0x02U
 #define BOOT_CMD_ERASE_APP          0x03U

@@ -119,9 +119,9 @@ extern "C" {
 #define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
 
 /* VBUS 泄放动作阈值：放电模式下超过 85V 通过 PB11 PWM (50%) 开启泄放；回落至 84V 关闭 (1V滞回防抖) */
-#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    85.0f
-#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   84.0f
-#define POWER_VBUS_RELEASE_PWM_DUTY        15U   /* PB11 TIM2_CH4 PWM 占空比 10% (ARR=99, Pulse=50) */
+#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    999.0f
+#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   998.0f
+#define POWER_VBUS_RELEASE_PWM_DUTY        0U   /* PB11 TIM2_CH4 PWM 占空比 10% (ARR=99, Pulse=50) */
 
 /* 电池物理在线判定电压阈值：低于该值判定为电池拔出/无电压 (V) */
 #define BATTERY_PHYSICAL_PRESENT_VOLTAGE   20.0f

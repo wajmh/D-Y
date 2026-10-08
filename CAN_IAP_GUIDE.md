@@ -94,7 +94,7 @@ sequenceDiagram
 
 | 指令 (CMD) | 作用说明 | Host 发送载荷 (8字节) | MCU 回复载荷 (8字节) |
 | :--- | :--- | :--- | :--- |
-| `0x01` | **握手与状态查询 (PING)** | `[0x01, 0, 0, 0, 0, 0, 0, 0]` | `[0x01, ACK(0), State(1=Boot/2=App), Major, Minor, AppValid(0/1), 0, 0]` |
+| `0x01` | **握手与状态查询 (PING)** | `[0x01, 0, 0, 0, 0, 0, 0, 0]` | `[0x01, ACK(0), State(1=Boot/2=App), Major, Minor, Patch, AppValid(0/1), 0]` |
 | `0x02` | **预备升级 (START)** | `[0x02, Size_B3, Size_B2, Size_B1, Size_B0, 0, 0, 0]` | `[0x02, ACK(0=允许/1=超限), PageSize(2KB), MaxCap(104KB), 0, 0, 0, 0]` |
 | `0x03` | **擦除 Flash (ERASE)** | `[0x03, 0x5A, 0xA5 (安全魔数), 0, 0, 0, 0, 0]` | `[0x03, ACK(0=成功/1=失败), 0, 0, 0, 0, 0, 0]` |
 | `0x04` | **固件数据包 (DATA)** | `[0x04, PktIdx_H, PktIdx_L, Len(1~4), D0, D1, D2, D3]` | 每 16 包或结束时 ACK: `[0x04, ACK(0), Pkt_H, Pkt_L, Offset_B3..B0]` |

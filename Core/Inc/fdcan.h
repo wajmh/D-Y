@@ -135,6 +135,11 @@ void MX_FDCAN3_Init(void);
 #define IAP_HOT_BOOT_MAGIC                       0xAA550000U
 #define IAP_BOOT_FLAG_ADDR                       (0x2001FC00U)  /* 预留 1KB 栈空间安全裕量，防止与 MSP 栈顶碰撞 */
 
+/* App 固件版本号定义 (三位版本: Major.Minor.Patch，例如 v1.2.1) */
+#define APP_FW_VERSION_MAJOR                     1U
+#define APP_FW_VERSION_MINOR                     2U
+#define APP_FW_VERSION_PATCH                     1U
+
 void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData);
 void FDCAN_IAP_JumpToBootloader(void);
 

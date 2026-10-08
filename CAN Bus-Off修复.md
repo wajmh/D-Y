@@ -318,10 +318,13 @@
           {                                                                           
             primask = __get_PRIMASK();                                                
             __disable_irq();                                                          
-            *detectTick = now;                                                        
-            *state = FDCAN_BUSOFF_STATE_PENDING;                                      
+            if (*generation == localGen)                                              
+            {                                                                         
+              *detectTick = now;                                                      
+              *state = FDCAN_BUSOFF_STATE_PENDING;                                    
+              FDCAN_IncrementDebugCounter(recoveryFailCount);                         
+            }                                                                         
             __set_PRIMASK(primask);                                                   
-            FDCAN_IncrementDebugCounter(recoveryFailCount);                           
           }                                                                           
           break;                                                                      
                                                                                       
@@ -341,10 +344,13 @@
           {                                                                           
             primask = __get_PRIMASK();                                                
             __disable_irq();                                                          
-            *detectTick = now;                                                        
-            *state = FDCAN_BUSOFF_STATE_PENDING;                                      
+            if (*generation == localGen)                                              
+            {                                                                         
+              *detectTick = now;                                                      
+              *state = FDCAN_BUSOFF_STATE_PENDING;                                    
+              FDCAN_IncrementDebugCounter(recoveryFailCount);                         
+            }                                                                         
             __set_PRIMASK(primask);                                                   
-            FDCAN_IncrementDebugCounter(recoveryFailCount);                           
           }                                                                           
           break;                                                                      
                                                                                       
