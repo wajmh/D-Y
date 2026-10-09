@@ -152,16 +152,24 @@ cd ..
    sudo ip link set can0 up
    ```
 
-2. **单片机正常运行时在线升级**（携带 `--trigger` 参数）：
+2. **交互式控制台菜单升级（推荐）**：
    ```sh
-   python3 scripts/can_iap_tool.py -c can0 -f build/Release/D-Y.bin --trigger
+   python3 scripts/can_iap_tool.py -c can0
    ```
+   * 启动后输入 `2` 即可直接一键升级；
+   * 固件（`D-Y.bin`）默认存放在与 `can_iap_tool.py` 同级目录下，**无需手动输入或选择文件路径**。
+
+3. **单片机正常运行时在线升级（命令行一键模式）**：
+   ```sh
+   python3 scripts/can_iap_tool.py -c can0 -u --trigger
+   ```
+   * 默认自动加载脚本同级目录下的 `D-Y.bin` 固件；若需使用其他固件，可通过 `-f <路径>` 指定；
    * 脚本自动与 App 握手，指示 App 安全切入 Bootloader（小脑 12V 供电持续不断）；
    * 单片机 RGB 蓝灯慢闪指示进入升级中；
    * 脚本擦除 Flash 并流式烧写数据，控制台打印彩色动态进度条与瞬时速率；
    * 校验通过后，单片机无感热跳转切回 App，指示灯恢复为正常工作绿灯。
 
-3. **单片机处于 Bootloader 模式时直接升级**：
+4. **单片机处于 Bootloader 模式时直接升级**：
    ```sh
-   python3 scripts/can_iap_tool.py -c can0 -f build/Release/D-Y.bin
+   python3 scripts/can_iap_tool.py -c can0 -u
    ```

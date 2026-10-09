@@ -6,13 +6,13 @@ STM32G474 CAN 通信 IAP 在线固件升级工具 (交互式 & 命令行双模�
 支持功能:
   1. 交互式菜单控制台:
      - [1] 查询单片机运行状态与固件版本 (3位: vX.Y.Z)
-     - [2] IAP 在线固件升级 (全自动一体化: 自动切入Bootloader -> 擦除 -> 烧录 -> 校验 -> 热跳转App -> 验证新版本)
+     - [2] IAP 在线固件升级 (全自动一体化: 默认直接使用同级目录固件，自动切入Bootloader -> 擦除 -> 烧录 -> 校验 -> 热跳转App -> 验证新版本)
      - [3] 修改 CAN 通信参数 (通道/波特率并重连)
      - [0] 退出工具
   2. 传统命令行一键模式 (兼容CI/自动化脚本):
      - 查询当前版本: python3 scripts/can_iap_tool.py -c can0 -q
-     - 升级运行中App: python3 scripts/can_iap_tool.py -c can0 -f build/Release/D-Y.bin --trigger
-     - 升级处于Bootloader的设备: python3 scripts/can_iap_tool.py -c can0 -f build/Release/D-Y.bin
+     - 一键升级App (使用同级固件): python3 scripts/can_iap_tool.py -c can0 -u --trigger
+     - 指定自定义固件升级: python3 scripts/can_iap_tool.py -c can0 -f custom.bin --trigger
 """
 
 import sys
@@ -428,17 +428,30 @@ def execute_upgrade_flow(updater, fw_path, auto_trigger=True):
 
 
 def find_default_firmware():
-    """在当前工作目录寻找常见的固件构建输出文件"""
-    candidates = [
-        "build/Release/D-Y.bin",
-        "build/Debug/D-Y.bin",
-        "build/D-Y.bin",
-        "D-Y.bin"
-    ]
-    for c in candidates:
-        if os.path.isfile(c):
-            return c
-    return ""
+    """
+    获取与 can_iap_tool.py 同级目录下的 App bin 固件文件路径。
+    默认优先查找 D-Y.bin，若不存在则寻找同级目录下的任意 *.bin 文件。
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    primary_bin = os.path.join(script_dir, "D-Y.bin")
+    if os.path.isfile(primary_bin):
+        return primary_bin
+
+    # 查找同级目录下的其他 .bin 固件
+    try:
+        bin_files = [
+            os.path.join(script_dir, f)
+            for f in os.listdir(script_dir)
+            if f.endswith(".bin") and not f.startswith(".")
+        ]
+        if bin_files:
+            # 按修改时间从新到旧排序，优先使用最新固件
+            bin_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            return bin_files[0]
+    except Exception:
+        pass
+
+    return primary_bin
 
 
 def interactive_menu(updater):
@@ -477,20 +490,15 @@ def interactive_menu(updater):
                 print(f"{CLR_GREEN}------------------------------------------------------{CLR_RESET}")
 
         elif choice == '2':
-            # 选项 2: IAP 在线固件升级 (全自动流程: 软重启切入Bootloader -> 擦除 -> 烧录 -> CRC校验 -> 热跳转运行App)
-            default_bin = find_default_firmware()
-            prompt = f"请输入固件路径 (*.bin) [{default_bin}]: " if default_bin else "请输入固件路径 (*.bin): "
-            try:
-                user_path = input(f"\n{prompt}").strip()
-            except (KeyboardInterrupt, EOFError):
-                print(f"\n{CLR_YELLOW}[*] 已取消升级操作{CLR_RESET}")
+            # 选项 2: IAP 在线固件升级 (默认直接使用同级目录下的固件，无需手动输入或选择路径)
+            target_path = find_default_firmware()
+            if not os.path.isfile(target_path):
+                print(f"\n{CLR_RED}[!] 错误: 未在同级目录下找到固件文件 (*.bin)！{CLR_RESET}")
+                print(f"    预期文件路径: {target_path}")
+                print(f"    请将 App 固件 (*.bin) 拷贝至脚本同级目录: {os.path.dirname(target_path)} 后重试。")
                 continue
 
-            target_path = user_path if user_path else default_bin
-            if not target_path:
-                print(f"{CLR_RED}[!] 未提供固件路径！{CLR_RESET}")
-                continue
-
+            print(f"\n{CLR_BLUE}[*] 准备使用同级目录固件升级: {CLR_BOLD}{target_path}{CLR_RESET}")
             execute_upgrade_flow(updater, target_path, auto_trigger=True)
 
         elif choice == '3':
@@ -522,12 +530,13 @@ def interactive_menu(updater):
 
 def main():
     parser = argparse.ArgumentParser(description="STM32G474 CAN IAP 在线升级工具")
-    parser.add_argument("-f", "--file", default="", help="待烧录的 App 固件文件路径 (*.bin) [指定则进入单次升级流程]")
+    parser.add_argument("-f", "--file", default="", help="待烧录的 App 固件文件路径 (*.bin) [可选，默认使用脚本同级目录下的固件]")
     parser.add_argument("-c", "--channel", default="can0", help="CAN 通道名称 (默认: can0)")
     parser.add_argument("-i", "--interface", default="socketcan", help="CAN 接口类型 (默认: socketcan)")
     parser.add_argument("-b", "--bitrate", type=int, default=250000, help="波特率 (默认: 250000)")
-    parser.add_argument("-t", "--trigger", action="store_true", help="[单次模式] 若单片机当前处于 App 状态，尝试下发指令软重启进入 Bootloader")
+    parser.add_argument("-t", "--trigger", action="store_true", help="若单片机当前处于 App 状态，尝试下发指令软重启进入 Bootloader")
     parser.add_argument("-q", "--query", action="store_true", help="[单次模式] 仅查询当前单片机固件版本与运行状态并退出")
+    parser.add_argument("-u", "--upgrade", action="store_true", help="[单次模式] 执行一键在线升级 (默认使用同级目录下的固件，无需指定路径)")
     parser.add_argument("--interactive", action="store_true", help="强制进入交互式控制台菜单模式")
 
     args = parser.parse_args()
@@ -540,8 +549,8 @@ def main():
     )
 
     # 判断是否进入单次非交互模式：
-    # 只要用户指定了 -f (固件文件) 或 -q (查询)，且未强制要求 --interactive，则执行单次任务
-    is_batch_mode = bool(args.file or args.query) and not args.interactive
+    # 只要用户指定了 -u (一键升级)、-f (指定固件)、-q (查询) 或 -t (触发升级)，且未强制要求 --interactive，则执行单次任务
+    is_batch_mode = bool(args.upgrade or args.file or args.query or args.trigger) and not args.interactive
 
     if is_batch_mode:
         updater.connect()
@@ -558,10 +567,16 @@ def main():
                 print(f"{CLR_GREEN}[+] App 固件状态:   {info['app_valid_str']}{CLR_RESET}")
                 sys.exit(0)
 
-            if args.file:
-                # 单次升级
-                success = execute_upgrade_flow(updater, args.file, auto_trigger=args.trigger)
-                sys.exit(0 if success else 1)
+            # 单次升级流程 (默认使用同级目录下固件，无需指定路径)
+            target_path = args.file if args.file else find_default_firmware()
+            if not os.path.isfile(target_path):
+                print(f"{CLR_RED}[!] 错误: 固件文件不存在: {target_path}{CLR_RESET}")
+                print(f"    请将固件 (*.bin) 放置于脚本同级目录或使用 -f 指定有效路径。")
+                sys.exit(1)
+
+            auto_trigger = args.trigger or args.upgrade or (not args.file)
+            success = execute_upgrade_flow(updater, target_path, auto_trigger=auto_trigger)
+            sys.exit(0 if success else 1)
         finally:
             updater.close()
     else:

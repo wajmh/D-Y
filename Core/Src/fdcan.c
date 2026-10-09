@@ -1513,7 +1513,6 @@ void FDCAN_BatteryCanTask(void)
         if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
         {
           batteryAlarmReportLastTxTick = now;
-          mosChangedPending = 0U;
         }
       }
     }
@@ -1525,7 +1524,6 @@ void FDCAN_BatteryCanTask(void)
         {
           batteryAlarmReportLastTxTick = now;
           alarmClearBurstRemaining--;
-          mosChangedPending = 0U;
         }
       }
     }
@@ -1536,7 +1534,6 @@ void FDCAN_BatteryCanTask(void)
         if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
         {
           batteryAlarmReportLastTxTick = now;
-          mosChangedPending = 0U;
         }
       }
     }
@@ -2000,17 +1997,8 @@ uint8_t FDCAN_IsAnyBusOff(void)
   /* 稳压电源测试模式下，可能未连接任何 CAN 从机节点，屏蔽 Bus-Off 报警避免指示灯闪烁 */
   return 0U;
 #else
-  if ((fdcan1_busoff_flag != 0U) || (fdcan2_busoff_flag != 0U) || (fdcan3_busoff_flag != 0U))
-  {
-    return 1U;
-  }
-  if (((FDCAN1->PSR & FDCAN_PSR_BO) != 0U) ||
-      ((FDCAN2->PSR & FDCAN_PSR_BO) != 0U) ||
-      ((FDCAN3->PSR & FDCAN_PSR_BO) != 0U))
-  {
-    return 1U;
-  }
-  return 0U;
+  /* 统一信任中断与 100ms 兜底状态机同步维护的软件标志，避免在主循环高频直读 PSR 导致 PSR.LEC 被清零 */
+  return ((fdcan1_busoff_flag != 0U) || (fdcan2_busoff_flag != 0U) || (fdcan3_busoff_flag != 0U)) ? 1U : 0U;
 #endif
 }
 
