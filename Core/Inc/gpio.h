@@ -123,8 +123,6 @@ extern "C" {
 #define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   998.0f
 #define POWER_VBUS_RELEASE_PWM_DUTY        0U   /* PB11 TIM2_CH4 PWM 占空比 10% (ARR=99, Pulse=50) */
 
-/* 电池物理在线判定电压阈值：低于该值判定为电池拔出/无电压 (V) */
-#define BATTERY_PHYSICAL_PRESENT_VOLTAGE   20.0f
 /* 电池异常报警状态定义 */
 #define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常在线 */
 #define BATTERY_ALARM_STATUS_CAN_COMM_LOST           0x01U /* CAN 通信掉线；已处于放电态时保持本地路径 */

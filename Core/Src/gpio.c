@@ -100,7 +100,6 @@ static void Power_FinishBattery1PreDischarge(void);
 static void Power_FinishBattery2PreDischarge(void);
 static void Power_EnableBattery1DischargePath(void);
 static void Power_EnableBattery2DischargePath(void);
-static void Power_DisableLowerRechargeMosBeforeNewDischarge(uint8_t newBatteryIndex);
 static void Power_UpdateBattery1Path(uint8_t present);
 static void Power_UpdateBattery2Path(uint8_t present);
 static void Power_DisableBattery1Path(void);
@@ -968,7 +967,14 @@ static uint8_t Power_GetRechargeMaskByCanVoltage(uint8_t battery1Ready, uint8_t 
 
   if ((battery1Ready != 0U) && (battery2Ready != 0U))
   {
-    if (rechargeCurrentOnlyMode == 0U)
+    /* 若此前在双路在线状态下已确认达成压差平衡，维持全回充模式 */
+    if (rechargeCurrentOnlyMode != 0U)
+    {
+      return 0x03U;
+    }
+
+    /* 必须双路 CAN 均在线，测得的电芯电压差才具备防倒灌评估价值 */
+    if ((Power_IsBatteryCanAlive(1U) != 0U) && (Power_IsBatteryCanAlive(2U) != 0U))
     {
       voltageDiff = Power_GetBalancedVoltageDiff();
 
@@ -983,9 +989,16 @@ static uint8_t Power_GetRechargeMaskByCanVoltage(uint8_t battery1Ready, uint8_t 
       }
 
       rechargeCurrentOnlyMode = 1U;
+      return 0x03U;
     }
 
-    return 0x03U;
+    /*
+     * 边界保护：双电池放电但尚未达成平衡前，若任一电池 CAN 掉线，无法获知真实压差，
+     * 绝对禁止误判为平衡态（禁止置 rechargeCurrentOnlyMode = 1，禁止返回 0x03U）。
+     * 为彻底杜绝未知电压下的跨母线充电环流，双路回充 MOS 均置为关断 (0x00U)；
+     * 此时双电池主放电 MOS 仍保持导通为系统供电，待双路通信恢复后再行恢复回充裁决。
+     */
+    return 0x00U;
   }
 
   rechargeCurrentOnlyMode = 0U;
@@ -1101,36 +1114,18 @@ static void Power_FinishBattery2PreDischarge(void)
 
 static void Power_EnableBattery1DischargePath(void)
 {
-  Power_DisableLowerRechargeMosBeforeNewDischarge(1U);
+  /* 新增主放电前，依据双电池压差直接同步配置回充 MOS，杜绝低压电池回充 MOS 瞬态误开通 */
+  Power_UpdateRechargeMos(1U, (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE) ? 1U : 0U);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
   battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
 }
 
 static void Power_EnableBattery2DischargePath(void)
 {
-  Power_DisableLowerRechargeMosBeforeNewDischarge(2U);
+  /* 新增主放电前，依据双电池压差直接同步配置回充 MOS，杜绝低压电池回充 MOS 瞬态误开通 */
+  Power_UpdateRechargeMos((battery1Control.state == POWER_BATTERY_STATE_DISCHARGE) ? 1U : 0U, 1U);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
   battery2Control.state = POWER_BATTERY_STATE_DISCHARGE;
-}
-
-static void Power_DisableLowerRechargeMosBeforeNewDischarge(uint8_t newBatteryIndex)
-{
-  float voltageDiff = Power_GetBalancedVoltageDiff();
-
-  if ((newBatteryIndex == 1U) &&
-      (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE) &&
-      (voltageDiff > POWER_RECHARGE_BALANCE_DIFF))
-  {
-    HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  }
-  else if ((newBatteryIndex == 2U) &&
-           (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE) &&
-           (voltageDiff < -POWER_RECHARGE_BALANCE_DIFF))
-  {
-    HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  }
 }
 
 static void Power_UpdateBattery1Path(uint8_t present)
