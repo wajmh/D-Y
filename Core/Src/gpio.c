@@ -154,7 +154,8 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_9, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, LED2_Pin|LED3_Pin|GPIO_PIN_10|GPIO_PIN_6
+                          |GPIO_PIN_7|GPIO_PIN_9, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PC13 PC14 PC15 PC2
                            PC4 PC10 PC11 PC12 */
@@ -172,8 +173,10 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB10 PB6 PB7 PB9 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_9;
+  /*Configure GPIO pins : LED2_Pin LED3_Pin PB10 PB6
+                           PB7 PB9 */
+  GPIO_InitStruct.Pin = LED2_Pin|LED3_Pin|GPIO_PIN_10|GPIO_PIN_6
+                          |GPIO_PIN_7|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -198,8 +201,9 @@ void Power_UpdateGpioDebugStates(void)
   peripheral_power_state = (HAL_GPIO_ReadPin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   dcdc_12v_state = (HAL_GPIO_ReadPin(DCDC_EN_12V_GPIO_Port, DCDC_EN_12V_Pin) == POWER_DCDC_ON) ? 1U : 0U;
   dcdc_24v_state = (HAL_GPIO_ReadPin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin) == POWER_DCDC_ON) ? 1U : 0U;
-  back_emf_absorb_1_state = 0U; /* PB12 未使用 */
-  back_emf_absorb_2_state = (__HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_4) > 0U) ? 1U : 0U;
+  back_emf_absorb_2_state = (((htim8.Instance->BDTR & TIM_BDTR_MOE) != 0U) &&
+                             (__HAL_TIM_GET_COMPARE(&htim8, TIM_CHANNEL_2) > 0U)) ? 1U : 0U;
+  back_emf_absorb_1_state = back_emf_absorb_2_state;
   back_emf_absorb_state = back_emf_absorb_2_state;
 }
 
@@ -214,9 +218,9 @@ void Power_AllMosOff(void)
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
 
-  /* 反电势吸收泄放关闭：PB11 TIM2_CH4 占空比设为 0；PB12 保持关断 */
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0U);
-  HAL_GPIO_WritePin(BACK_EMF_ABSORB_1_GPIO_Port, BACK_EMF_ABSORB_1_Pin, POWER_SWITCH_OFF);
+  /* 反电势吸收泄放关闭：禁用 TIM8 主输出 (MOE) 并将占空比置 0，两路输出硬件拉低至 GND */
+  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
   back_emf_absorb_1_state = 0U;
   back_emf_absorb_2_state = 0U;
   back_emf_absorb_state = 0U;
@@ -509,23 +513,26 @@ void Power_UpdateVbusPowerRelease(void)
   {
     if (currentVbus >= POWER_VBUS_RELEASE_OPEN_VOLTAGE)
     {
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, POWER_VBUS_RELEASE_PWM_DUTY);
+      __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, POWER_VBUS_RELEASE_PWM_DUTY);
+      __HAL_TIM_MOE_ENABLE(&htim8);
       back_emf_absorb_2_state = 1U;
     }
     else if (currentVbus <= POWER_VBUS_RELEASE_CLOSE_VOLTAGE)
     {
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0U);
+      __HAL_TIM_MOE_DISABLE(&htim8);
+      __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
       back_emf_absorb_2_state = 0U;
     }
     /* 处于 84.0V ~ 85.0V 滞回区间时保持当前 PWM 输出状态 */
   }
   else
   {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0U);
+    __HAL_TIM_MOE_DISABLE(&htim8);
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
     back_emf_absorb_2_state = 0U;
   }
 
-  back_emf_absorb_1_state = 0U;
+  back_emf_absorb_1_state = back_emf_absorb_2_state;
   back_emf_absorb_state = back_emf_absorb_2_state;
 
   /* 泄放状态跳变时立即同步更新声光报警指示 */
@@ -770,7 +777,8 @@ void Power_TestBattery1DischargeSequence(void)
   Power_AllMosOff();
 
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0U);
+  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
   HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
   HAL_Delay(POWER_PRE_DISCHARGE_DELAY_MS);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
@@ -1247,11 +1255,17 @@ void Power_SetDcdc24V(uint8_t enable)
   HAL_GPIO_WritePin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin, (enable != 0U) ? POWER_DCDC_ON : POWER_DCDC_OFF);
 }
 
-void Power_SetRgbLed(uint8_t r, uint8_t g, uint8_t b)
+void Power_SetRgyLed(uint8_t r, uint8_t g, uint8_t y)
 {
   HAL_GPIO_WritePin(RGB_LED_R_GPIO_Port, RGB_LED_R_Pin, (r != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
   HAL_GPIO_WritePin(RGB_LED_G_GPIO_Port, RGB_LED_G_Pin, (g != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(RGB_LED_B_GPIO_Port, RGB_LED_B_Pin, (b != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(RGB_LED_Y_GPIO_Port, RGB_LED_Y_Pin, (y != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void Power_SetRgbLed(uint8_t r, uint8_t g, uint8_t b)
+{
+  /* 兼容旧 API：第3路参数在实际物理硬件上驱动的是黄灯 (PC14) */
+  Power_SetRgyLed(r, g, b);
 }
 
 void Power_SetBuzzer(uint8_t on)
@@ -1270,12 +1284,13 @@ void Power_TriggerBootBeep(void)
 
 static uint8_t physicalR = 0U;
 static uint8_t physicalG = 0U;
-static uint8_t physicalB = 0U;
+static uint8_t physicalY = 0U;
 static uint8_t physicalBuzzer = 0U;
 
 uint8_t Power_GetPhysicalR(void) { return physicalR; }
 uint8_t Power_GetPhysicalG(void) { return physicalG; }
-uint8_t Power_GetPhysicalB(void) { return physicalB; }
+uint8_t Power_GetPhysicalY(void) { return physicalY; }
+uint8_t Power_GetPhysicalB(void) { return physicalY; } /* 兼容旧接口命名 */
 uint8_t Power_GetPhysicalBuzzer(void) { return physicalBuzzer; }
 
 void Power_UpdateStatusIndicators(void)
@@ -1283,205 +1298,201 @@ void Power_UpdateStatusIndicators(void)
   uint32_t now = HAL_GetTick();
   uint8_t outR = 0U;
   uint8_t outG = 0U;
-  uint8_t outB = 0U;
+  uint8_t outY = 0U;
   uint8_t outBuzzer = 0U;
 
-  /* 1. 绝对最高安全优先级：反电势吸收泄放激活（VBUS >= 85V），强制蜂鸣器常鸣 + 红灯常亮 */
-  if (back_emf_absorb_state != 0U)
+  /* ==================== 1. 指示灯控制决策 ====================
+   * 指示灯完全由小脑下发的功能码控制；若通信超时或功能码为 0 则全灭 (OFF)。
+   * 硬件特性：仅有红(PC15)、绿(PC2)、黄(PC14)三色独立通道，无法混色 (无白光)。
+   * 单片机本地安全告警由板载 LED2/LED3 与蜂鸣器处理，不占用外部三色灯。
+   */
+  uint8_t funcCode = FDCAN_GetRgbFunctionCode();
+
+  switch (funcCode)
   {
-    outR = 1U;
-    outG = 0U;
-    outB = 0U;
-    outBuzzer = 1U;
-  }
-  /* 2. 次高优先级：CAN Bus-Off 故障，红灯以 200ms 周期闪烁，蜂鸣器静音关断 */
-  else if (FDCAN_IsAnyBusOff() != 0U)
-  {
-    if (((now / POWER_STATUS_LED_BUSOFF_BLINK_MS) % 2U) == 0U)
-    {
-      outR = 1U;
-    }
-    outG = 0U;
-    outB = 0U;
-    outBuzzer = 0U;
-  }
-  /* 2. 次高优先级：急停开关触发，红灯常亮报警，蜂鸣器静音关断 */
-  /* [急停功能已停用，硬件未连接]
-  else if (Power_IsEmergencyStopActive() != 0U)
-  {
-    outR = 1U;
-    outG = 0U;
-    outB = 0U;
-    outBuzzer = 0U;
-  }
-  */
-  else
-  {
-    /* 3. RGB 控制决策 */
-    if (FDCAN_IsRkRgbActive() != 0U)
-    {
-      /* 小脑接管 RGB 控制权 */
-      if (rkIndicatorCtrl.rgbMode == FDCAN_INDICATOR_RGB_MODE_BLINK)
+    case FDCAN_RGB_FUNC_P0_RED_BURST_6HZ:
+      /* P0: 急停 / 碰撞 / BMS报警 (红 爆闪 6Hz, 周期 167ms, 亮83ms / 灭84ms) */
+      if ((now % RGB_FLASH_P0_PERIOD_MS) < RGB_FLASH_P0_ON_MS)
       {
-        uint32_t hp = (rkIndicatorCtrl.halfPeriodMs > 0U) ? rkIndicatorCtrl.halfPeriodMs : 500U;
-        if (((now / hp) % 2U) == 0U)
+        outR = 1U;
+      }
+      break;
+
+    case FDCAN_RGB_FUNC_P1_RED_FAST_3HZ:
+      /* P1: 严重故障 (红 快闪 3Hz, 周期 333ms, 亮167ms / 灭166ms) */
+      if ((now % RGB_FLASH_P1_PERIOD_MS) < RGB_FLASH_P1_ON_MS)
+      {
+        outR = 1U;
+      }
+      break;
+
+    case FDCAN_RGB_FUNC_P3_YELLOW_DOUBLE_0_5HZ:
+      /* P3: 倾倒、跌落 (黄 双连闪 0.5Hz, 周期 2000ms: 0~150ms亮, 150~300ms灭, 300~450ms亮, 450~2000ms灭) */
+      {
+        uint32_t phase = now % RGB_FLASH_P3_PERIOD_MS;
+        if ((phase < RGB_FLASH_P3_PULSE_MS) ||
+            ((phase >= (RGB_FLASH_P3_PULSE_MS * 2U)) && (phase < (RGB_FLASH_P3_PULSE_MS * 3U))))
         {
-          outR = rkIndicatorCtrl.r;
-          outG = rkIndicatorCtrl.g;
-          outB = rkIndicatorCtrl.b;
+          outY = 1U; /* 独立驱动黄灯 PC14 */
+        }
+      }
+      break;
+
+    case FDCAN_RGB_FUNC_P4_YELLOW_STD_1HZ:
+      /* P4: 一般警告 (黄 标准闪 1Hz, 周期 1000ms, 亮500ms / 灭500ms) */
+      if ((now % RGB_FLASH_P4_PERIOD_MS) < RGB_FLASH_P4_ON_MS)
+      {
+        outY = 1U; /* 独立驱动黄灯 PC14 */
+      }
+      break;
+
+    case FDCAN_RGB_FUNC_P5_GREEN_PULSE_3HZ:
+      /* P5: 语音监听 / 指令确认 (绿 短促闪 3Hz, 周期 333ms, 短亮80ms / 灭253ms) */
+      if ((now % RGB_FLASH_P5_PERIOD_MS) < RGB_FLASH_P5_ON_MS)
+      {
+        outG = 1U;
+      }
+      break;
+
+    case FDCAN_RGB_FUNC_P6_MARQUEE_2HZ:
+      /* P6: 自主巡检 / 建图 (红黄绿三色跑马灯 2Hz, 周期 500ms: 红 167ms -> 黄 167ms -> 绿 166ms) */
+      {
+        uint32_t phase = now % RGB_FLASH_P6_PERIOD_MS;
+        if (phase < RGB_FLASH_P6_STEP1_MS)
+        {
+          outR = 1U;
+        }
+        else if (phase < RGB_FLASH_P6_STEP2_MS)
+        {
+          outY = 1U; /* 独立驱动黄灯 PC14 */
         }
         else
         {
-          outR = 0U;
-          outG = 0U;
-          outB = 0U;
+          outG = 1U;
         }
       }
-      else
-      {
-        /* 常亮模式 */
-        outR = rkIndicatorCtrl.r;
-        outG = rkIndicatorCtrl.g;
-        outB = rkIndicatorCtrl.b;
-      }
+      break;
+
+    case FDCAN_RGB_FUNC_SOLID_RED:
+      /* 红灯常亮 */
+      outR = 1U;
+      break;
+
+    case FDCAN_RGB_FUNC_SOLID_GREEN:
+      /* 绿灯常亮 */
+      outG = 1U;
+      break;
+
+    case FDCAN_RGB_FUNC_SOLID_YELLOW:
+    case FDCAN_RGB_FUNC_SOLID_YELLOW_ALIAS:
+      /* 黄灯常亮 (独立 PC14) */
+      outY = 1U;
+      break;
+
+    case FDCAN_RGB_FUNC_OFF:
+    default:
+      /* 关灯或未识别功能码：全灭 */
+      outR = 0U;
+      outG = 0U;
+      outY = 0U;
+      break;
+  }
+
+  /* ==================== 2. 蜂鸣器控制决策 ====================
+   * 1. 绝对最高硬件安全优先级：反电势吸收泄放激活 (VBUS >= 85V)，强制蜂鸣器长鸣报警
+   * 2. 小脑控制模式 (若未被调试屏蔽且指令有效)
+   * 3. 本地开机提示音模式
+   */
+  if (back_emf_absorb_state != 0U)
+  {
+    outBuzzer = 1U;
+  }
+  else if (FDCAN_IsRkBuzzerActive() != 0U)
+  {
+    /* 小脑接管蜂鸣器：硬件具备自激间隔鸣叫特性，MCU 仅需输出 0(关) 或 1(开) */
+    outBuzzer = (FDCAN_GetRkAlarmState() != 0U) ? 1U : 0U;
+  }
+  else
+  {
+    /* 本地模式：若有开机就绪提示音则响，否则静音 */
+    if ((powerBootBeepTriggered != 0U) &&
+        ((now - powerBootBeepStartTick) < POWER_BOOT_BEEP_DURATION_MS))
+    {
+      outBuzzer = 1U;
     }
     else
     {
-#if defined(POWER_STATUS_LED_FLOWING_TEST_ENABLE) && (POWER_STATUS_LED_FLOWING_TEST_ENABLE != 0U)
-      /* IAP 测试流水灯：红 -> 绿 -> 蓝 循环流动点亮 (每 300ms 切换一次)，便于直观验证 App 固件运行 */
-      uint32_t step = (now / POWER_STATUS_LED_FLOWING_STEP_MS) % 3U;
-      if (step == 0U)
-      {
-        outR = 1U;
-        outG = 0U;
-        outB = 0U;
-      }
-      else if (step == 1U)
-      {
-        outR = 0U;
-        outG = 1U;
-        outB = 0U;
-      }
-      else
-      {
-        outR = 0U;
-        outG = 0U;
-        outB = 1U;
-      }
-#else
-      /* 本地自动模式：根据电池 SOC 呈现三级电量指示 */
-      uint8_t hasSoc1 = FDCAN_IsBatterySocValid(1U);
-      uint8_t hasSoc2 = FDCAN_IsBatterySocValid(2U);
-      float effectiveSoc = 100.0f;
-      uint8_t hasValidSoc = 0U;
-
-      if ((hasSoc1 != 0U) && (hasSoc2 != 0U))
-      {
-        float soc1 = FDCAN_GetBatterySoc(1U);
-        float soc2 = FDCAN_GetBatterySoc(2U);
-        effectiveSoc = (soc1 < soc2) ? soc1 : soc2;
-        hasValidSoc = 1U;
-      }
-      else if (hasSoc1 != 0U)
-      {
-        effectiveSoc = FDCAN_GetBatterySoc(1U);
-        hasValidSoc = 1U;
-      }
-      else if (hasSoc2 != 0U)
-      {
-        effectiveSoc = FDCAN_GetBatterySoc(2U);
-        hasValidSoc = 1U;
-      }
-
-      if (hasValidSoc == 0U)
-      {
-        outG = 1U; /* 刚上电未收到有效电量帧：默认绿灯常亮 */
-      }
-      else if (effectiveSoc > POWER_STATUS_LED_SOC_HIGH_THRESHOLD)
-      {
-        outG = 1U; /* 电量 > 50%：绿灯常亮 */
-      }
-      else if (effectiveSoc >= POWER_STATUS_LED_SOC_LOW_THRESHOLD)
-      {
-        outB = 1U; /* 20% <= 电量 <= 50%：蓝灯常亮 */
-      }
-      else
-      {
-        outR = 1U; /* 电量 < 20%：红灯常亮 */
-      }
-#endif
-    }
-
-    /* 4. 蜂鸣器控制决策 */
-    if (FDCAN_IsRkBuzzerActive() != 0U)
-    {
-      /* 小脑接管蜂鸣器 */
-      switch (rkIndicatorCtrl.buzzerMode)
-      {
-        case FDCAN_INDICATOR_BUZZER_MODE_ON:
-          outBuzzer = 1U;
-          break;
-
-        case FDCAN_INDICATOR_BUZZER_MODE_BEEP_ONCE:
-          if (rkIndicatorCtrl.beepActive != 0U)
-          {
-            if ((now - rkIndicatorCtrl.beepStartTick) < FDCAN_INDICATOR_BEEP_ONCE_DURATION_MS)
-            {
-              outBuzzer = 1U;
-            }
-            else
-            {
-              outBuzzer = 0U;
-              rkIndicatorCtrl.beepActive = 0U;
-            }
-          }
-          else
-          {
-            outBuzzer = 0U;
-          }
-          break;
-
-        case FDCAN_INDICATOR_BUZZER_MODE_BLINK:
-          {
-            uint32_t hp = (rkIndicatorCtrl.halfPeriodMs > 0U) ? rkIndicatorCtrl.halfPeriodMs : 500U;
-            outBuzzer = (((now / hp) % 2U) == 0U) ? 1U : 0U;
-          }
-          break;
-
-        case FDCAN_INDICATOR_BUZZER_MODE_OFF:
-        default:
-          outBuzzer = 0U;
-          break;
-      }
-    }
-    else
-    {
-      /* 本地模式：若有开机就绪提示音则响，否则静音 */
-      if ((powerBootBeepTriggered != 0U) &&
-          ((now - powerBootBeepStartTick) < POWER_BOOT_BEEP_DURATION_MS))
-      {
-        outBuzzer = 1U;
-      }
-      else
-      {
-        outBuzzer = 0U;
-      }
+      outBuzzer = 0U;
     }
   }
 
-  /* 5. 驱动硬件输出并更新记录 */
-  Power_SetRgbLed(outR, outG, outB);
+  /* 3. 驱动硬件输出并更新记录 */
+  Power_SetRgyLed(outR, outG, outY);
   Power_SetBuzzer(outBuzzer);
+
+  /* 4. 更新板载 3.3V 状态指示灯 (LED2 心跳 / LED3 动力状态) */
+  Power_UpdateBoardLeds();
 
   physicalR = outR;
   physicalG = outG;
-  physicalB = outB;
+  physicalY = outY;
   physicalBuzzer = outBuzzer;
 }
 
 void Power_UpdateStatusLed(void)
 {
   Power_UpdateStatusIndicators();
+}
+
+void Power_UpdateBoardLeds(void)
+{
+  uint32_t now = HAL_GetTick();
+  GPIO_PinState led2State = BOARD_LED_OFF;
+  GPIO_PinState led3State = BOARD_LED_OFF;
+
+  /* --- LED2: 板载系统运行心跳灯 (PB1) --- */
+  /* 若存在 CAN Bus-Off 错误或电池通信丢失等告警，5Hz 快速闪烁 (100ms 翻转)；
+   * 正常运行时以 1Hz 慢闪 (500ms 翻转) */
+  uint8_t hasAlarm = ((FDCAN_IsAnyBusOff() != 0U) ||
+                      (battery1AlarmStatus != BATTERY_ALARM_STATUS_NORMAL) ||
+                      (battery2AlarmStatus != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
+  if (hasAlarm != 0U)
+  {
+    led2State = (((now / 100U) % 2U) == 0U) ? BOARD_LED_ON : BOARD_LED_OFF;
+  }
+  else
+  {
+    led2State = (((now / 500U) % 2U) == 0U) ? BOARD_LED_ON : BOARD_LED_OFF;
+  }
+
+  /* --- LED3: 板载动力电源状态指示 (PB2) --- */
+  if (back_emf_absorb_state != 0U)
+  {
+    /* 泄放动作激活：高频爆闪 (50ms 翻转) 提示大功率泄放中 */
+    led3State = (((now / 50U) % 2U) == 0U) ? BOARD_LED_ON : BOARD_LED_OFF;
+  }
+  else if ((battery1Control.state == POWER_BATTERY_STATE_PRE_DISCHARGE) ||
+           (battery2Control.state == POWER_BATTERY_STATE_PRE_DISCHARGE))
+  {
+    /* 上电预充中：2Hz 闪烁 (250ms 翻转) 提示正在预充缓启动 */
+    led3State = (((now / 250U) % 2U) == 0U) ? BOARD_LED_ON : BOARD_LED_OFF;
+  }
+  else if (((battery1Control.state == POWER_BATTERY_STATE_DISCHARGE) ||
+            (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE) ||
+            (powerWorkMode == POWER_WORK_MODE_CHARGE)) &&
+           (dcdc_24v_state != 0U))
+  {
+    /* 动力输出就绪 (主放电 MOS 导通且 24V DCDC 已打开)：常亮 */
+    led3State = BOARD_LED_ON;
+  }
+  else
+  {
+    /* 待机 / 完全未就绪：熄灭 */
+    led3State = BOARD_LED_OFF;
+  }
+
+  HAL_GPIO_WritePin(BOARD_LED2_GPIO_Port, BOARD_LED2_Pin, led2State);
+  HAL_GPIO_WritePin(BOARD_LED3_GPIO_Port, BOARD_LED3_Pin, led3State);
 }
 
 /* ==================== IAP 无缝热接力状态机与硬件控制 ==================== */
@@ -1573,9 +1584,9 @@ void Power_HotBootGpioInit(uint8_t batMask)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, POWER_DCDC_ON); /* 保持 12V DCDC 持续不断电 (Active Low) */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 
-  /* GPIOB: PB6 (Bat1主放电, 高开), 其余关 */
+  /* GPIOB: PB6 (Bat1主放电, 高开), 板载 LED2/LED3 置默认电平, 其余关 */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, ((batMask & 0x01U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7 | GPIO_PIN_9 | GPIO_PIN_10, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, LED2_Pin | LED3_Pin | GPIO_PIN_7 | GPIO_PIN_9 | GPIO_PIN_10, GPIO_PIN_RESET);
 
   /* 2. 配置引脚为推挽输出模式 */
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -1589,7 +1600,7 @@ void Power_HotBootGpioInit(uint8_t batMask)
   GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_7;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  GPIO_InitStruct.Pin = GPIO_PIN_10 | GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_9;
+  GPIO_InitStruct.Pin = LED2_Pin | LED3_Pin | GPIO_PIN_10 | GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_9;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 /* USER CODE END 2 */

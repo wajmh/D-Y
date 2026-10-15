@@ -61,13 +61,28 @@ extern "C" {
 #define BAT2_CHARGE_MOS_GPIO_Port          BAT_CHARGE_MOS_GPIO_Port
 #define BAT2_CHARGE_MOS_Pin                BAT_CHARGE_MOS_Pin
 
-/* ==================== 2路反电势吸收保护 ==================== */
-#define BACK_EMF_ABSORB_1_GPIO_Port        GPIOB
-#define BACK_EMF_ABSORB_1_Pin              GPIO_PIN_12  /* PB12: 电池1回路反电势泄放 MOS */
-#define BACK_EMF_ABSORB_2_GPIO_Port        GPIOB
-#define BACK_EMF_ABSORB_2_Pin              GPIO_PIN_11  /* PB11: 电池2回路反电势泄放 MOS */
+/* ==================== 反电势吸收保护 (TIM8 互补 PWM) ==================== */
+#define BACK_EMF_ABSORB_CH2_GPIO_Port      GPIOC
+#define BACK_EMF_ABSORB_CH2_Pin            GPIO_PIN_7   /* PC7: TIM8_CH2 泄放2 MOS (Q27) */
+#define BACK_EMF_ABSORB_CH2N_GPIO_Port     GPIOB
+#define BACK_EMF_ABSORB_CH2N_Pin           GPIO_PIN_0   /* PB0: TIM8_CH2N 泄放1 MOS (Q7) */
+
+/* 兼容旧宏定义 */
+#define BACK_EMF_ABSORB_1_GPIO_Port        BACK_EMF_ABSORB_CH2N_GPIO_Port
+#define BACK_EMF_ABSORB_1_Pin              BACK_EMF_ABSORB_CH2N_Pin
+#define BACK_EMF_ABSORB_2_GPIO_Port        BACK_EMF_ABSORB_CH2_GPIO_Port
+#define BACK_EMF_ABSORB_2_Pin              BACK_EMF_ABSORB_CH2_Pin
 #define BACK_EMF_ABSORB_GPIO_Port          BACK_EMF_ABSORB_2_GPIO_Port
 #define BACK_EMF_ABSORB_Pin                BACK_EMF_ABSORB_2_Pin
+
+/* ==================== 板载 3.3V 独立状态指示灯 (V1.3 新增) ==================== */
+#define BOARD_LED2_GPIO_Port               GPIOB
+#define BOARD_LED2_Pin                     GPIO_PIN_1   /* PB1: 板载 LED2 (翠绿心跳) */
+#define BOARD_LED3_GPIO_Port               GPIOB
+#define BOARD_LED3_Pin                     GPIO_PIN_2   /* PB2: 板载 LED3 (翠绿动力状态) */
+
+#define BOARD_LED_ON                       GPIO_PIN_SET
+#define BOARD_LED_OFF                      GPIO_PIN_RESET
 
 /* ==================== 新增：隔离 DCDC 使能控制 ==================== */
 #define DCDC_EN_12V_GPIO_Port              GPIOA
@@ -75,13 +90,18 @@ extern "C" {
 #define DCDC_EN_24V_GPIO_Port              GPIOC
 #define DCDC_EN_24V_Pin                    GPIO_PIN_4   /* PC4: 24V 使能 */
 
-/* ==================== 新增：三色灯与蜂鸣器控制 ==================== */
+/* ==================== 新增：三色状态指示灯 (红/绿/黄) 与蜂鸣器控制 ====================
+ * 硬件说明：实际板载/外部指示灯为红、绿、黄 (R/G/Y) 独立三色，无法混色 (无白光)；
+ * 原理图 Page 9 误将黄灯标为 RGB_B，实际物理引脚 PC14 驱动的是黄色 LED。
+ */
 #define RGB_LED_R_GPIO_Port                GPIOC
 #define RGB_LED_R_Pin                      GPIO_PIN_15  /* PC15: 红灯 */
 #define RGB_LED_G_GPIO_Port                GPIOC
 #define RGB_LED_G_Pin                      GPIO_PIN_2   /* PC2: 绿灯 */
-#define RGB_LED_B_GPIO_Port                GPIOC
-#define RGB_LED_B_Pin                      GPIO_PIN_14  /* PC14: 蓝灯 */
+#define RGB_LED_Y_GPIO_Port                GPIOC
+#define RGB_LED_Y_Pin                      GPIO_PIN_14  /* PC14: 黄灯 (原理图误标为RGB_B) */
+#define RGB_LED_B_GPIO_Port                RGB_LED_Y_GPIO_Port /* 兼容旧宏别名 */
+#define RGB_LED_B_Pin                      RGB_LED_Y_Pin
 #define BUZZER_ALARM_GPIO_Port             GPIOC
 #define BUZZER_ALARM_Pin                   GPIO_PIN_13  /* PC13: 蜂鸣器 */
 
@@ -118,10 +138,10 @@ extern "C" {
 /* 双回充 MOS 打开后，某路电流占总电流低于该比例，认为疑似未放电 */
 #define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
 
-/* VBUS 泄放动作阈值：放电模式下超过 85V 通过 PB11 PWM (50%) 开启泄放；回落至 84V 关闭 (1V滞回防抖) */
-#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    999.0f
-#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   998.0f
-#define POWER_VBUS_RELEASE_PWM_DUTY        0U   /* PB11 TIM2_CH4 PWM 占空比 10% (ARR=99, Pulse=50) */
+/* VBUS 泄放动作阈值：放电模式下超过 85V 通过 TIM8 互补 PWM (50%) 开启交替斩波泄放；回落至 84V 关闭 (1V滞回防抖) */
+#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    85.0f
+#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   84.0f
+#define POWER_VBUS_RELEASE_PWM_DUTY        50U   /* TIM8_CH2/CH2N 互补 PWM 占空比 50% (ARR=99, Pulse=50) */
 
 /* 电池异常报警状态定义 */
 #define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常在线 */
@@ -130,17 +150,31 @@ extern "C" {
 #define BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE  0x03U /* BMS 明确禁止放电，对应本地放电 MOS 和回充 MOS 已关闭 */
 #define BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN       0x04U /* BMS 放电 MOS 状态未知 / 无效；放电态维持本地路径供电防空中断电，非放电态禁止准入 */
 
-/* 状态指示灯 SOC 阈值：>50% 绿灯常亮，20%~50% 蓝灯常亮，<20% 红灯常亮 */
-#define POWER_STATUS_LED_SOC_HIGH_THRESHOLD          50.0f
-#define POWER_STATUS_LED_SOC_LOW_THRESHOLD           20.0f
-/* Bus-Off 错误红灯闪烁半周期 (ms) */
-#define POWER_STATUS_LED_BUSOFF_BLINK_MS             200U
 /* 开机自检完成就绪蜂鸣时长 (ms)：硬件为间歇脉冲型蜂鸣器，90ms 刚好触发单次短“滴”并避免触发第二声 */
 #define POWER_BOOT_BEEP_DURATION_MS                  90U
 
-/* IAP 测试流水灯配置：置 1 启用流水灯 (红->绿->蓝 循环流动)，置 0 恢复正常 SOC 电量指示 */
-#define POWER_STATUS_LED_FLOWING_TEST_ENABLE         0U
-#define POWER_STATUS_LED_FLOWING_STEP_MS             300U /* 流水灯每步切换周期 (ms) */
+/* ==================== 小脑 RGB 指示灯动态模式时序参数定义 (ms) ====================
+ * RGB 指示灯完全由小脑通过 CAN2 功能码控制，单片机按如下时序驱动：
+ * P0 (0x01): 红 爆闪 6Hz (周期≈167ms, 亮83ms/灭84ms)
+ * P1 (0x02): 红 快闪 3Hz (周期≈333ms, 亮167ms/灭166ms)
+ * P3 (0x03): 黄 双连闪 0.5Hz (周期2000ms, 亮150ms/灭150ms/亮150ms/灭1550ms)
+ * P4 (0x04): 黄 标准闪 1Hz (周期1000ms, 亮500ms/灭500ms)
+ * P5 (0x05): 绿 短促闪 3Hz (周期≈333ms, 亮80ms/灭253ms)
+ * P6 (0x06): RGB 跑马灯 2Hz (周期500ms, 红167ms -> 绿167ms -> 蓝166ms)
+ */
+#define RGB_FLASH_P0_PERIOD_MS                       167U
+#define RGB_FLASH_P0_ON_MS                           83U
+#define RGB_FLASH_P1_PERIOD_MS                       333U
+#define RGB_FLASH_P1_ON_MS                           167U
+#define RGB_FLASH_P3_PERIOD_MS                       2000U
+#define RGB_FLASH_P3_PULSE_MS                        150U
+#define RGB_FLASH_P4_PERIOD_MS                       1000U
+#define RGB_FLASH_P4_ON_MS                           500U
+#define RGB_FLASH_P5_PERIOD_MS                       333U
+#define RGB_FLASH_P5_ON_MS                           80U
+#define RGB_FLASH_P6_PERIOD_MS                       500U
+#define RGB_FLASH_P6_STEP1_MS                        167U
+#define RGB_FLASH_P6_STEP2_MS                        334U
 
 /* ==================== 稳压电源/母线泄放测试模式配置 ====================
  * POWER_TEST_BENCH_SUPPLY_MODE:
@@ -196,14 +230,17 @@ uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex);
 /* 辅助外设控制 API */
 void Power_SetDcdc12V(uint8_t enable);
 void Power_SetDcdc24V(uint8_t enable);
+void Power_SetRgyLed(uint8_t r, uint8_t g, uint8_t y);
 void Power_SetRgbLed(uint8_t r, uint8_t g, uint8_t b);
 void Power_SetBuzzer(uint8_t on);
 void Power_UpdateStatusIndicators(void);
 void Power_UpdateStatusLed(void);
+void Power_UpdateBoardLeds(void);
 
 uint8_t Power_GetPhysicalR(void);
 uint8_t Power_GetPhysicalG(void);
 uint8_t Power_GetPhysicalB(void);
+uint8_t Power_GetPhysicalY(void);
 uint8_t Power_GetPhysicalBuzzer(void);
 void Power_TriggerBootBeep(void);
 

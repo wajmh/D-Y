@@ -99,10 +99,13 @@ int main(void)
   MX_FDCAN2_Init();
   MX_FDCAN3_Init();
   MX_USART2_UART_Init();
-  MX_TIM2_Init();
+  MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
   ADC2_StartDMA();
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
+  HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
+  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
   if (Power_IsHotBoot() == 0U)
   {
     HAL_Delay(20);

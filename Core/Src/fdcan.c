@@ -108,6 +108,7 @@ volatile uint8_t rk_charge_mode_request = 0U;
 volatile uint8_t charge_mode_active = 0U;
 volatile RkIndicatorControl_t rkIndicatorCtrl = {0};
 static uint32_t rkIndicatorReportLastTxTick = 0U;
+static uint8_t rkIndicatorPrevActive = 0U;
 
 static void FDCAN_IncrementDebugCounter(volatile uint32_t *counter)
 {
@@ -965,7 +966,9 @@ static void FDCAN_HandleRkChargeModeCommand(const FDCAN_RxHeaderTypeDef *rxHeade
 static void FDCAN_HandleRkIndicatorCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t rxData[])
 {
   uint32_t now;
-  uint8_t ctrlMask;
+  uint8_t wasActive;
+  uint8_t prevFuncCode;
+  uint8_t prevAlarmState;
 
   if ((rxHeader->IdType != FDCAN_EXTENDED_ID) ||
       (rxHeader->RxFrameType != FDCAN_DATA_FRAME) ||
@@ -976,51 +979,35 @@ static void FDCAN_HandleRkIndicatorCommand(const FDCAN_RxHeaderTypeDef *rxHeader
   }
 
   now = HAL_GetTick();
-  ctrlMask = rxData[0];
+  wasActive = FDCAN_IsRkRgbActive();
+  prevFuncCode = rkIndicatorCtrl.functionCode;
+  prevAlarmState = rkIndicatorCtrl.alarmState;
 
-  rkIndicatorCtrl.rgbTakeover = ((ctrlMask & FDCAN_INDICATOR_CTRL_RGB_MASK) != 0U) ? 1U : 0U;
-#if DEBUG_DISABLE_RK_BUZZER_CTRL
-  rkIndicatorCtrl.buzzerTakeover = 0U; /* 调试屏蔽：禁止小脑接管蜂鸣器 */
-#else
-  rkIndicatorCtrl.buzzerTakeover = ((ctrlMask & FDCAN_INDICATOR_CTRL_BUZZER_MASK) != 0U) ? 1U : 0U;
-#endif
+  /* Byte 0: RGB 功能码 (0x00: OFF, 0x01~0x09: 各灯效) */
+  rkIndicatorCtrl.functionCode = rxData[0];
 
-  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_4)
+  /* Byte 1 (可选): Alarm 控制状态 (0:关, 1:开)；若 DLC=1 则保持原状态不变 (上电复位默认关闭) */
+  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_2)
   {
-    rkIndicatorCtrl.r = (rxData[1] != 0U) ? 1U : 0U;
-    rkIndicatorCtrl.g = (rxData[2] != 0U) ? 1U : 0U;
-    rkIndicatorCtrl.b = (rxData[3] != 0U) ? 1U : 0U;
+    rkIndicatorCtrl.alarmState = (rxData[1] != 0U) ? FDCAN_INDICATOR_ALARM_ON : FDCAN_INDICATOR_ALARM_OFF;
   }
 
-  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_5)
+  /* Byte 2 (可选): 安全超时时间 (单位 100ms)。若缺省或为 0 则使用默认 2000ms；若为 0xFF 则表示常驻/永不超时 */
+  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_3)
   {
-    rkIndicatorCtrl.rgbMode = (rxData[4] != 0U) ? FDCAN_INDICATOR_RGB_MODE_BLINK : FDCAN_INDICATOR_RGB_MODE_SOLID;
-  }
-
-  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_6)
-  {
-    rkIndicatorCtrl.buzzerMode = rxData[5];
-    if (rkIndicatorCtrl.buzzerMode == FDCAN_INDICATOR_BUZZER_MODE_BEEP_ONCE)
+    uint8_t timeoutUnits = rxData[2];
+    if (timeoutUnits == 0xFFU)
     {
-      rkIndicatorCtrl.beepStartTick = now;
-      rkIndicatorCtrl.beepActive = 1U;
+      rkIndicatorCtrl.timeoutMs = 0U; /* 0 表示无限期/永不超时 */
     }
-  }
-
-  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_7)
-  {
-    uint8_t halfPeriodUnits = rxData[6];
-    rkIndicatorCtrl.halfPeriodMs = (halfPeriodUnits > 0U) ? ((uint32_t)halfPeriodUnits * 50U) : 500U;
-  }
-  else
-  {
-    rkIndicatorCtrl.halfPeriodMs = 500U;
-  }
-
-  if (rxHeader->DataLength >= FDCAN_DLC_BYTES_8)
-  {
-    uint8_t timeoutUnits = rxData[7];
-    rkIndicatorCtrl.timeoutMs = (timeoutUnits > 0U) ? ((uint32_t)timeoutUnits * 100U) : 0U;
+    else if (timeoutUnits > 0U)
+    {
+      rkIndicatorCtrl.timeoutMs = (uint32_t)timeoutUnits * 100U;
+    }
+    else
+    {
+      rkIndicatorCtrl.timeoutMs = FDCAN_INDICATOR_DEFAULT_TIMEOUT_MS;
+    }
   }
   else
   {
@@ -1028,6 +1015,16 @@ static void FDCAN_HandleRkIndicatorCommand(const FDCAN_RxHeaderTypeDef *rxHeader
   }
 
   rkIndicatorCtrl.lastRxTick = now;
+
+  /* 若状态发生跳变或刚从离线变为在线，立即触发单次事件上报 */
+  if ((wasActive == 0U) ||
+      (prevFuncCode != rkIndicatorCtrl.functionCode) ||
+      (prevAlarmState != rkIndicatorCtrl.alarmState))
+  {
+    Power_UpdateStatusIndicators();
+    (void)FDCAN_SendIndicatorStatusToRk();
+    rkIndicatorReportLastTxTick = now; /* 同步重置周期计时，避免短时间内突发重复帧 */
+  }
 }
 
 void FDCAN_IAP_JumpToBootloader(void)
@@ -1054,9 +1051,11 @@ void FDCAN_IAP_JumpToBootloader(void)
   /* 2. 停用 ADC 采集，防止带载干扰及 DMA 悬挂中断 */
   ADC2_StopDMA();
 
-  /* 3. 关闭反电势泄放 PWM 定时器 */
-  (void)HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_4);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0U);
+  /* 3. 关闭反电势泄放 PWM 定时器 (TIM8 互补输出) */
+  __HAL_TIM_MOE_DISABLE(&htim8);
+  (void)HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_2);
+  (void)HAL_TIMEx_PWMN_Stop(&htim8, TIM_CHANNEL_2);
+  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
 
   /* 4. 安全关断充电、回充、预放电等高危及测试回路 */
   HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
@@ -1064,7 +1063,6 @@ void FDCAN_IAP_JumpToBootloader(void)
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BACK_EMF_ABSORB_1_GPIO_Port, BACK_EMF_ABSORB_1_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
 
   /* 5. 关键保持：维持上位机 12V (PA7) 和声光 24V (PC4) 隔离 DCDC 开启 (低电平使能) */
@@ -1075,8 +1073,8 @@ void FDCAN_IAP_JumpToBootloader(void)
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, (batMask & 0x01U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, (batMask & 0x02U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
 
-  /* 蓝灯点亮指示升级中，熄灭绿灯与红灯 */
-  HAL_GPIO_WritePin(RGB_LED_B_GPIO_Port, RGB_LED_B_Pin, GPIO_PIN_SET);
+  /* 黄灯点亮指示升级中，熄灭绿灯与红灯 (PC14 物理为黄灯，原理图误标为RGB_B) */
+  HAL_GPIO_WritePin(RGB_LED_Y_GPIO_Port, RGB_LED_Y_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(RGB_LED_G_GPIO_Port, RGB_LED_G_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(RGB_LED_R_GPIO_Port, RGB_LED_R_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(BUZZER_ALARM_GPIO_Port, BUZZER_ALARM_Pin, GPIO_PIN_RESET);
@@ -1544,13 +1542,22 @@ void FDCAN_BatteryCanTask(void)
       FDCAN_SendCurrentReportsToRk();
     }
 
+    /* 超时跳变检测：若此前受控且本次检测已超时离线，立即上报一次全灭/关断状态 */
+    {
+      uint8_t currActive = FDCAN_IsRkRgbActive();
+      if ((rkIndicatorPrevActive != 0U) && (currActive == 0U))
+      {
+        Power_UpdateStatusIndicators();
+        (void)FDCAN_SendIndicatorStatusToRk();
+        rkIndicatorReportLastTxTick = now; /* 超时即时上报后同步重置周期计时 */
+      }
+      rkIndicatorPrevActive = currActive;
+    }
+
     if ((now - rkIndicatorReportLastTxTick) >= FDCAN_RK_INDICATOR_REPORT_PERIOD_MS)
     {
       rkIndicatorReportLastTxTick = now;
-      (void)FDCAN_SendIndicatorStatusToRk(Power_GetPhysicalR(),
-                                          Power_GetPhysicalG(),
-                                          Power_GetPhysicalB(),
-                                          Power_GetPhysicalBuzzer());
+      (void)FDCAN_SendIndicatorStatusToRk();
     }
   } /* 结束 RK 门禁保护块 */
 
@@ -2004,9 +2011,9 @@ uint8_t FDCAN_IsAnyBusOff(void)
 
 uint8_t FDCAN_IsRkRgbActive(void)
 {
-  if (rkIndicatorCtrl.rgbTakeover == 0U)
+  if (rkIndicatorCtrl.lastRxTick == 0U)
   {
-    return 0U;
+    return 0U; /* 未收到过小脑指令，默认离线 */
   }
   if (rkIndicatorCtrl.timeoutMs == 0U)
   {
@@ -2015,12 +2022,21 @@ uint8_t FDCAN_IsRkRgbActive(void)
   return ((HAL_GetTick() - rkIndicatorCtrl.lastRxTick) <= rkIndicatorCtrl.timeoutMs) ? 1U : 0U;
 }
 
+uint8_t FDCAN_GetRgbFunctionCode(void)
+{
+  if (FDCAN_IsRkRgbActive() == 0U)
+  {
+    return (uint8_t)FDCAN_RGB_FUNC_OFF;
+  }
+  return rkIndicatorCtrl.functionCode;
+}
+
 uint8_t FDCAN_IsRkBuzzerActive(void)
 {
 #if DEBUG_DISABLE_RK_BUZZER_CTRL
   return 0U; /* 调试配置：小脑控制蜂鸣器接口关闭 */
 #else
-  if (rkIndicatorCtrl.buzzerTakeover == 0U)
+  if (rkIndicatorCtrl.lastRxTick == 0U)
   {
     return 0U;
   }
@@ -2032,63 +2048,62 @@ uint8_t FDCAN_IsRkBuzzerActive(void)
 #endif
 }
 
-HAL_StatusTypeDef FDCAN_SendIndicatorStatusToRk(uint8_t rOutput, uint8_t gOutput, uint8_t bOutput, uint8_t buzzerOutput)
+uint8_t FDCAN_GetRkAlarmState(void)
 {
-  uint8_t statusData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
-  uint8_t takeoverByte = 0U;
-  float minSoc = 100.0f;
-  uint8_t hasSoc = 0U;
-  uint8_t faultByte = 0U;
+  if (FDCAN_IsRkBuzzerActive() == 0U)
+  {
+    return FDCAN_INDICATOR_ALARM_OFF;
+  }
+  return rkIndicatorCtrl.alarmState;
+}
 
-  if (FDCAN_IsRkRgbActive() != 0U)
+HAL_StatusTypeDef FDCAN_SendIndicatorStatusToRk(void)
+{
+  FDCAN_TxHeaderTypeDef txHeader;
+  uint8_t statusData[2] = {0U, 0U};
+  uint32_t primask;
+  HAL_StatusTypeDef status;
+
+  /* Byte 0: 当前生效的三色灯状态码 (若离线超时则为 0x00) */
+  statusData[0] = FDCAN_GetRgbFunctionCode();
+
+  /* Byte 1: Alarm 当前状态 (0:关, 1:开) */
+  statusData[1] = (Power_GetPhysicalBuzzer() != 0U) ? FDCAN_INDICATOR_ALARM_ON : FDCAN_INDICATOR_ALARM_OFF;
+
+  /* 快速预检（无锁） */
+  if (fdcan2_busoff_flag != 0U)
   {
-    takeoverByte |= 0x01U;
-  }
-  if (FDCAN_IsRkBuzzerActive() != 0U)
-  {
-    takeoverByte |= 0x02U;
+    return HAL_BUSY;
   }
 
-  statusData[0] = takeoverByte;
-  statusData[1] = (rOutput != 0U) ? 1U : 0U;
-  statusData[2] = (gOutput != 0U) ? 1U : 0U;
-  statusData[3] = (bOutput != 0U) ? 1U : 0U;
-  statusData[4] = (buzzerOutput != 0U) ? 1U : 0U;
+  if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan2) == 0U)
+  {
+    return HAL_BUSY;
+  }
 
-  if (FDCAN_IsBatterySocValid(1U) != 0U)
-  {
-    minSoc = FDCAN_GetBatterySoc(1U);
-    hasSoc = 1U;
-  }
-  if (FDCAN_IsBatterySocValid(2U) != 0U)
-  {
-    float s2 = FDCAN_GetBatterySoc(2U);
-    if ((hasSoc == 0U) || (s2 < minSoc))
-    {
-      minSoc = s2;
-    }
-    hasSoc = 1U;
-  }
-  statusData[5] = (hasSoc != 0U) ? (uint8_t)(minSoc + 0.5f) : 100U;
+  /* 配置 txHeader (DLC = 2 字节) */
+  txHeader.Identifier = FDCAN_RK_INDICATOR_STATUS_ID;
+  txHeader.IdType = FDCAN_EXTENDED_ID;
+  txHeader.TxFrameType = FDCAN_DATA_FRAME;
+  txHeader.DataLength = FDCAN_DLC_BYTES_2;
+  txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  txHeader.BitRateSwitch = FDCAN_BRS_OFF;
+  txHeader.FDFormat = FDCAN_CLASSIC_CAN;
+  txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+  txHeader.MessageMarker = 0U;
 
-  if (FDCAN_IsAnyBusOff() != 0U)
+  /* 临界区保护：原子检查标志与入队 */
+  primask = __get_PRIMASK();
+  __disable_irq();
+  if (fdcan2_busoff_flag != 0U)
   {
-    faultByte |= 0x01U;
+    __set_PRIMASK(primask);
+    return HAL_BUSY;
   }
-  /* [急停功能已停用，硬件未连接]
-  if (Power_IsEmergencyStopActive() != 0U)
-  {
-    faultByte |= 0x02U;
-  }
-  */
-  if ((hasSoc != 0U) && (minSoc < 20.0f))
-  {
-    faultByte |= 0x04U;
-  }
-  statusData[6] = faultByte;
-  statusData[7] = 0x00U;
+  status = HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, statusData);
+  __set_PRIMASK(primask);
 
-  return FDCAN_SendCurrentReport(FDCAN_RK_INDICATOR_STATUS_ID, statusData);
+  return status;
 }
 /* USER CODE END 1 */
 

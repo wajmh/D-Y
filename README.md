@@ -1,8 +1,8 @@
-# D-Y 四足机器人双电池智能电源管理系统固件 (v1.2.1)
+# D-Y 四足机器人双电池智能电源管理系统固件 (v1.4.0)
 
 [![MCU](https://img.shields.io/badge/MCU-STM32G474RBT6-blue.svg)](https://www.st.com/en/microcontrollers-microprocessors/stm32g474rb.html)
-[![Firmware Version](https://img.shields.io/badge/Firmware-v1.2.1-blue.svg)]()
-[![Hardware Version](https://img.shields.io/badge/Hardware-V1.2-brightgreen.svg)]()
+[![Firmware Version](https://img.shields.io/badge/Firmware-v1.4.0-blue.svg)]()
+[![Hardware Version](https://img.shields.io/badge/Hardware-V1.3-brightgreen.svg)]()
 [![Build System](https://img.shields.io/badge/Build-CMake%20%7C%20Ninja%20%7C%20GCC-orange.svg)]()
 [![CAN IAP](https://img.shields.io/badge/CAN_IAP-Supported-green.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Quadruped%20Robot-purple.svg)]()
@@ -61,9 +61,10 @@
 6. **三路 FDCAN 协议网关中枢**：
    - 双路独立对接双组动力电池 BMS（解析总压、电流、SOC、电芯状态、故障码并下发周期唤醒帧）；
    - 一路专线对接上位机小脑，支持高频遥测上报（桥臂电流、外设电流、MOS 状态、电池告警）、充电桩通信与 IAP 升级。
-7. **全套工业级声光告警与状态指示**：
-   - RGB 三色 LED 指示电量状态（$\ge$50% 绿、20~50% 蓝、<20% 红）、CAN Bus-Off 故障（红灯以 200ms 周期闪烁）、IAP 升级状态；
-   - 蜂鸣器自检开机短鸣与过压/泄放紧急警报。
+7. **工业级声光告警与状态指示**：
+   - RGB 三色 LED 完全通过 FDCAN2 开放给小脑，基于功能码实现机器人全状态与多级报警时序驱动；
+   - 板载 LED2 (PB1) 作为系统运行与 Bus-Off 错误心跳指示，LED3 (PB2) 作为动力输出就绪/预充/泄放指示；
+   - 蜂鸣器支持开机自检短鸣、过压/泄放硬件强制鸣叫及小脑远程接管控制。
 
 ---
 
@@ -135,14 +136,16 @@ flowchart TD
 | | `PC10` | `O_Bat2_D_CHG` | GPIO_Output | 推挽输出 | 电池 2 回充 MOS |
 | **总充电与外设** | `PB10` | `O_Bat_C_G` | GPIO_Output | 推挽输出 | 充电口背对背 MOS，直通 VBUS |
 | | `PA5` | `O_Peripheral_G` | GPIO_Output | 推挽输出 | 板载外设总电源 MOS 开关 |
-| **反电势吸收** | `PB12` | `O_Power_Release1` | GPIO_Output | 推挽输出 | 反电势吸收保护控制回路 1 |
-| | `PB11` | `O_Power_Release2` | TIM2_CH4 / GPIO | 推挽输出/PWM | 反电势吸收保护控制回路 2 (PWM 占空比泄放) |
+| **反电势吸收 (V1.3)** | `PB0` | `O_Power_Release1` | TIM8_CH2N | 互补PWM | 反电势吸收保护控制回路 1 (互补通道交替斩波) |
+| | `PC7` | `O_Power_Release2` | TIM8_CH2 | 主PWM | 反电势吸收保护控制回路 2 (主通道交替斩波) |
+| **板载状态灯 (V1.3)** | `PB1` | `LED2` | GPIO_Output | 推挽输出 | 板载 3.3V 系统心跳灯 (正常 1Hz / 告警 5Hz) |
+| | `PB2` | `LED3` | GPIO_Output | 推挽输出 | 板载 3.3V 动力状态灯 (预充 2Hz / 就绪常亮 / 泄放爆闪) |
 | **DCDC 使能** | `PA7` | `O_Enable_12V` | GPIO_Output | 低电平有效 | 12V 隔离电源使能（开机默认高关断，放电/就绪下拉低导通） |
 | | `PC4` | `O_Enable_24V` | GPIO_Output | 低电平有效 | 24V 隔离电源使能（开机默认高关断，放电/就绪下拉低导通） |
-| **状态声光** | `PC15` | `O_RGB_R` | GPIO_Output | 低端吸电流 | RGB 状态指示灯 - 红灯 |
-| | `PC2` | `O_RGB_G` | GPIO_Output | 低端吸电流 | RGB 状态指示灯 - 绿灯 |
-| | `PC14` | `O_RGB_B` | GPIO_Output | 低端吸电流 | RGB 状态指示灯 - 蓝灯 |
-| | `PC13` | `O_Alarm` | GPIO_Output | 推挽输出 | 蜂鸣器驱动（高电平鸣响） |
+| **状态声光** | `PC15` | `O_RGB_R` | GPIO_Output | 低端吸电流 | 外部 RGB 状态指示灯 - 红灯（供电由 24V DCDC 提供） |
+| | `PC2` | `O_RGB_G` | GPIO_Output | 低端吸电流 | 外部 RGB 状态指示灯 - 绿灯（供电由 24V DCDC 提供） |
+| | `PC14` | `O_RGB_B` | GPIO_Output | 低端吸电流 | 外部 RGB 状态指示灯 - 蓝灯（供电由 24V DCDC 提供） |
+| | `PC13` | `O_Alarm` | GPIO_Output | 推挽吸电流 | 外部蜂鸣器驱动（供电由 24V DCDC 提供） |
 | **模拟量采集** | `PA4` | `A_Peripheral_Current` | ADC2_IN17 | DMA 循环 | 外设放电电流检测（经运放采样） |
 | | `PB15` | `A_Vbus_Voltage` | ADC2_IN15 | DMA 循环 | 系统母线 VBUS 分压采样 |
 | **通信接口** | `PA11/PA12` | `CAN1_RX/TX` | FDCAN1 | 250kbps | 电池 1 BMS 专线通信 |
@@ -178,9 +181,9 @@ flowchart TD
 
 四足机器人在高速跑动制动、跳跃腾空及落下触地瞬间，12 个关节电机会产生显著的反向能量倒灌，造成 VBUS 电压异常泵升：
 - **母线实时监测**：ADC2 连续采样 `PB15` 母线电压；
-- **过压动作阈值**：当母线电压上升超过设定安全门限时，自动启动吸收回路（`PB11/PB12`）；
-- **PWM 柔性斩波**：通过 TIM2_CH4 PWM 调节吸收 MOS 占空比，降低泄放回路功耗与热应力；
-- **超限最高优先级报警**：母线泄放触发时，立即同步置起最高优先级声光报警（蜂鸣器常鸣 + 红灯常亮）。
+- **过压动作阈值**：当母线电压上升超过 85V 时，自动启动吸收回路；回落至 84V 时关闭（1V 滞回防抖）；
+- **高级定时器互补斩波 (TIM8)**：通过 `PC7` (TIM8_CH2) 与 `PB0` (TIM8_CH2N) 互补 PWM（50% 占空比）交替驱动两路独立泄放 MOS（Q27 与 Q7），均摊发热负荷，并配置硬件死区时间防止直通；
+- **超限最高优先级报警**：母线泄放触发时，立即同步置起最高优先级声光报警（蜂鸣器常鸣 + 红灯常亮），板载 LED3 同步爆闪。
 
 ### 3.4 防空中断电与 BMS 异常容错
 
@@ -189,15 +192,31 @@ flowchart TD
 - **放电态未知（UNKNOWN）锁死保护**：若电池在正常供电放电运行中，BMS 状态跳变异常或出现 UNKNOWN，只要电池物理在位，**本地放电 MOS 坚决保持导通**，保证小脑与关节供电不中断；仅在开机未就绪阶段严格禁止未知状态电池准入。
 
 ### 3.5 状态指示灯与声光报警逻辑
+ 
+- **小脑三色状态指示灯协议（CAN2 ID: `0x04600000`，Byte 0 功能码）**：
+  单片机不再将三色灯用于本地系统调试灯，而是完全开放给上位机小脑下发功能码控制，单片机按精密时序驱动。
+  > **硬件特性说明**：指示灯实际物理为**红 (PC15)、绿 (PC2)、黄 (PC14)** 独立三色，原理图误标为 `RGB_B`，硬件**不支持混色亦无白色**。黄灯由独立引脚驱动。
 
-- **电量显示（RGB 指示）**：
-  - $\text{SOC} \ge 50\%$：绿灯常亮；
-  - $20\% \le \text{SOC} < 50\%$：蓝灯常亮；
-  - $\text{SOC} < 20\%$：红灯常亮；
-- **总线故障（Bus-Off）**：红灯以 200ms 周期闪烁提示（蜂鸣器关断）；
-- **泄放动作 / 严重报警**：红灯常亮 + 蜂鸣器长鸣；
-- **Bootloader 升级中**：蓝灯慢闪；
-- **开机自检**：初始化就绪后蜂鸣器发出 90ms 短促“滴”声提示。
+  | 功能码 | 对应业务/优先级 | 颜色 | 动态模式 | 周期/频率 | 详细闪烁时序 |
+  | :---: | :--- | :---: | :---: | :---: | :--- |
+  | **`0x00`** | 关灯 (OFF) | 熄灭 | 常闭 | - | 全灭 (小脑离线/超时 2s 亦自动全灭) |
+  | **`0x01`** | **P0**: 急停 / 碰撞 / BMS报警 | **红** | 爆闪 | 6Hz (≈167ms) | 亮 83ms / 灭 84ms (50% 占空比) |
+  | **`0x02`** | **P1**: 严重故障 (过温/过流/定位丢失) | **红** | 快闪 | 3Hz (≈333ms) | 亮 167ms / 灭 166ms (50% 占空比) |
+  | **`0x03`** | **P3**: 倾倒、跌落 | **黄** | 双连闪 | 0.5Hz (2000ms) | 亮 150ms → 灭 150ms → 亮 150ms → 灭 1550ms (独立 PC14) |
+  | **`0x04`** | **P4**: 一般警告 (低电量/弱信号/脏污) | **黄** | 标准闪 | 1Hz (1000ms) | 亮 500ms / 灭 500ms (50% 占空比, 独立 PC14) |
+  | **`0x05`** | **P5**: 语音监听 / 指令确认 | **绿** | 短促闪 | 3Hz (≈333ms) | 短亮 80ms / 灭 253ms (指令确认脉冲) |
+  | **`0x06`** | **P6**: 自主巡检 / 建图 | **红黄绿** | 跑马灯 | 2Hz (500ms) | 红 167ms → 黄 167ms → 绿 166ms 循环流转 |
+  | **`0x07`** | **红灯常亮** | **红** | 常亮 (Solid) | - | 红色持续常亮 |
+  | **`0x08`** | **绿灯常亮** | **绿** | 常亮 (Solid) | - | 绿色持续常亮 |
+  | **`0x09`** | **黄灯常亮** | **黄** | 常亮 (Solid) | - | 黄色持续常亮 (独立 PC14, `0x0A` 亦为兼容别名) |
+
+- **板载 3.3V 指示灯（单片机本地硬件状态）**：
+  - **LED2 (PB1, 绿色)**：系统心跳灯。正常运行时 1Hz 慢闪（500ms 翻转）；存在 CAN Bus-Off 错误或电池通信丢失时 5Hz 快闪（100ms 翻转）；
+  - **LED3 (PB2, 绿色)**：动力输出指示。放电就绪（主放电 MOS 导通且 24V DCDC 开启）常亮；上电预放电缓冲期间 2Hz 闪烁（250ms 翻转）；母线泄放吸收激活时 50ms 高频爆闪告警；待机/未就绪熄灭。
+- **Alarm 蜂鸣器指示**：
+  - 母线反电势过压泄放（VBUS $\ge$ 85V）时强制硬件长鸣告警；
+  - 开机自检就绪发出 90ms 短“滴”声；
+  - 正常运行时支持小脑通过报文 Byte 1 控制开/关（硬件激活后自主间隔型鸣叫）。
 
 ---
 
@@ -376,5 +395,6 @@ D-Y-A10/
 - [CAN IAP 在线升级指南](file:///home/yq/ghf/workspace/D-Y-A10/CAN_IAP_GUIDE.md)
 - [电源板 V1.2 MCU 引脚分配与功能说明](file:///home/yq/ghf/workspace/D-Y-A10/电源板V1.2_MCU引脚分配与功能说明.md)
 - [充电控制逻辑与协议交互](file:///home/yq/ghf/workspace/D-Y-A10/充电控制逻辑与协议交互.md)
+- [三色灯控制逻辑与CAN通信协议 (ICD)](file:///home/yq/ghf/workspace/D-Y-A10/三色灯控制逻辑与CAN通信协议.md)
 - [CAN3 逻辑总结](file:///home/yq/ghf/workspace/D-Y-A10/CAN3_逻辑总结.md)
 - [CAN Bus-Off 优化总结](file:///home/yq/ghf/workspace/D-Y-A10/CAN%20Bus-Off%20优化总结.md)
