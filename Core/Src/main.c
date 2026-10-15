@@ -21,7 +21,7 @@
 #include "adc.h"
 #include "dma.h"
 #include "fdcan.h"
-#include "i2c.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -70,7 +70,9 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  SCB->VTOR = 0x08006000U;
+  __enable_irq();
+  Power_CheckAndHandleHotBoot();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -92,23 +94,29 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_ADC1_Init();
   MX_ADC2_Init();
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   MX_FDCAN3_Init();
-  MX_I2C1_Init();
   MX_USART2_UART_Init();
+  MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
-  ADC1_StartDMA();//DMA ADC init
   ADC2_StartDMA();
-  HAL_Delay(20);
-  ADC_CalibrateLegCurrentOffsets();
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
+  HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
+  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
+  if (Power_IsHotBoot() == 0U)
+  {
+    HAL_Delay(20);
+    ADC_CalibrateCurrentOffsets();
+  }
   ADC_UpdateCurrents();
   ADC2_UpdateBatteryVoltages();
   FDCAN_BatteryCanStart();
   Power_UpdateGpioDebugStates();//mos管的检测
-  Power_EnterDischargeMode();//初始化双电池状态
+  Power_EnterDischargeMode();//初始化双电池状态 (热接力时跳过预充平滑接管)
+  Power_UpdateStatusIndicators();//正常上电后点亮声光指示灯（默认绿灯常亮）
 
   /* USER CODE END 2 */
 
@@ -123,8 +131,9 @@ int main(void)
     ADC2_UpdateBatteryVoltages();//电池电压的更新
     FDCAN_BatteryCanTask();
     Power_UpdateGpioDebugStates();
-    Power_DischargeModeTask();
-    FDCAN_CheckAndRecoverAllBusOff();//Bus-Off 中断触发后的恢复处理
+    Power_ModeTask();
+    Power_UpdateStatusIndicators();//声光状态指示与小脑控制响应
+    FDCAN_CheckAndRecoverAllBusOff(); // ★ 纯异步执行恢复状态机
   }
   /* USER CODE END 3 */
 }
