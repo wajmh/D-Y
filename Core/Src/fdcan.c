@@ -36,10 +36,12 @@
 #define FDCAN_BATTERY_TEMP_ID_BASE   0x04078000U
 #define FDCAN_BATTERY_ID_MASK        0x1FFFFF00U
 #define FDCAN_PERIPHERAL_CURRENT_REPORT_ID 0x04200000U
+#define FDCAN_PERIPHERAL_TELEMETRY_REPORT_ID FDCAN_PERIPHERAL_CURRENT_REPORT_ID
 #define FDCAN_BATTERY_ALARM_REPORT_ID 0x04400000U
 #define FDCAN_CURRENT_REPORT_PERIOD_MS 200U
 #define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 100U
 #define FDCAN_CURRENT_REPORT_SCALE    100.0f
+#define FDCAN_VBUS_REPORT_SCALE       100.0f
 #define FDCAN_BATTERY_WAKE_PERIOD_MS  2000U
 #define FDCAN_BMS_MOS_DEBOUNCE_FRAMES 3U
 
@@ -360,6 +362,29 @@ static void FDCAN_PackInt16LittleEndian(uint8_t data[], uint8_t offset, int16_t 
   data[offset + 1U] = (uint8_t)((raw >> 8) & 0xFFU);
 }
 
+static void FDCAN_PackUint16LittleEndian(uint8_t data[], uint8_t offset, uint16_t value)
+{
+  data[offset] = (uint8_t)(value & 0xFFU);
+  data[offset + 1U] = (uint8_t)((value >> 8) & 0xFFU);
+}
+
+static uint16_t FDCAN_VbusVoltageToCanRaw(float voltage)
+{
+  if (voltage <= 0.0f)
+  {
+    return 0U;
+  }
+
+  float scaled = voltage * FDCAN_VBUS_REPORT_SCALE;
+
+  if (scaled >= 65535.0f)
+  {
+    return 65535U;
+  }
+
+  return (uint16_t)(scaled + 0.5f);
+}
+
 static HAL_StatusTypeDef FDCAN_SendCurrentReport(uint32_t identifier, const uint8_t txData[])
 {
   FDCAN_TxHeaderTypeDef txHeader;
@@ -404,13 +429,24 @@ static HAL_StatusTypeDef FDCAN_SendCurrentReport(uint32_t identifier, const uint
 
 static void FDCAN_SendCurrentReportsToRk(void)
 {
-  uint8_t peripheralCurrentData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+  uint8_t peripheralTelemetryData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
 
-  FDCAN_PackInt16LittleEndian(peripheralCurrentData,
+  /* Byte 0~1: 外设放电电流 (int16_t LE, 精度 0.01A) */
+  FDCAN_PackInt16LittleEndian(peripheralTelemetryData,
                               0U,
                               FDCAN_CurrentToCanRaw(ADC_GetPeripheralDischargeCurrent()));
 
-  (void)FDCAN_SendCurrentReport(FDCAN_PERIPHERAL_CURRENT_REPORT_ID, peripheralCurrentData);
+  /* Byte 2~3: 母线 VBUS 采样电压 (uint16_t LE, 精度 0.01V, 0~655.35V) */
+  FDCAN_PackUint16LittleEndian(peripheralTelemetryData,
+                               2U,
+                               FDCAN_VbusVoltageToCanRaw(ADC_GetVbusVoltage()));
+
+  /* Byte 4: TIM8 斩波反电势泄放状态 (uint8_t, 0=未泄放, 1=泄放中) */
+  peripheralTelemetryData[4] = (back_emf_absorb_state != 0U) ? 1U : 0U;
+
+  /* Byte 5~7: 预留填 0x00 */
+
+  (void)FDCAN_SendCurrentReport(FDCAN_PERIPHERAL_CURRENT_REPORT_ID, peripheralTelemetryData);
 }
 
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
