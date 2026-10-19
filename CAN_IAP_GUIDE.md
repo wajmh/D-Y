@@ -31,11 +31,11 @@
 - **小脑（RK3588）供电**：由板载 **12V 隔离 DCDC 模块（PA7 使能）** 供电；
 - **RGB 声光指示灯面板**：共阳极由板载 **24V 隔离 DCDC 模块（PC4 使能）** 供电；
 - **DCDC 动力来源**：12V 与 24V DCDC 模块的输入均直接取自 **母线（VBUS）**；
-- **母线来源**：母线电力来自于 **双电池的主放电 MOS（Bat1=PB6, Bat2=PC11）**。
+- **母线来源**：单动力电池架构下，母线电力来自 **电池 1 主放电 MOS（PB6）与回充 MOS（PB7）**（电池 2 回路彻底关断隔离）。
 
 ```mermaid
 flowchart LR
-    Bat[动力电池 Bat1/Bat2] -->|主放电 MOS (PB6/PC11)| VBUS[动力母线 VBUS]
+    Bat1[动力电池 1] -->|主放电/回充 MOS (PB6/PB7)| VBUS[动力母线 VBUS]
     VBUS --> DCDC12[12V 隔离 DCDC (PA7)] --> RK[上位机小脑 RK3588]
     VBUS --> DCDC24[24V 隔离 DCDC (PC4)] --> RGB[RGB 声光指示面板]
 ```

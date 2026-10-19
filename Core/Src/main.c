@@ -97,7 +97,6 @@ int main(void)
   MX_ADC2_Init();
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
-  MX_FDCAN3_Init();
   MX_USART2_UART_Init();
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
@@ -112,10 +111,10 @@ int main(void)
     ADC_CalibrateCurrentOffsets();
   }
   ADC_UpdateCurrents();
-  ADC2_UpdateBatteryVoltages();
+  ADC2_UpdateVbusVoltage();
   FDCAN_BatteryCanStart();
   Power_UpdateGpioDebugStates();//mos管的检测
-  Power_EnterDischargeMode();//初始化双电池状态 (热接力时跳过预充平滑接管)
+  Power_EnterDischargeMode();//进入单电池放电模式 (热接力时跳过预充平滑接管)
   Power_UpdateStatusIndicators();//正常上电后点亮声光指示灯（默认绿灯常亮）
 
   /* USER CODE END 2 */
@@ -128,7 +127,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     ADC_UpdateCurrents();//放电电流的更新
-    ADC2_UpdateBatteryVoltages();//电池电压的更新
+    ADC2_UpdateVbusVoltage();//VBUS母线电压更新
     FDCAN_BatteryCanTask();
     Power_UpdateGpioDebugStates();
     Power_ModeTask();

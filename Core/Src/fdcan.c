@@ -29,21 +29,13 @@
 
 #define FDCAN_BATTERY_STATUS_ID_BASE 0x04028000U
 #define FDCAN_BATTERY_STATUS_ID_MASK 0x1FFFFF00U
-#define FDCAN_BATTERY_CHARGE_REPLY_STATUS_ID_BASE 0x04028000U
-#define FDCAN_BATTERY_CHARGE_REPLY_INFO_ID_BASE   0x04008000U
-#define FDCAN_BATTERY_CHARGE_REPLY_TEMP_ID_BASE   0x04088000U
 #define FDCAN_BATTERY_MOS_ID_BASE    0x04068000U
 #define FDCAN_BATTERY_MOS_ID_MASK    0x1FFFFF00U
 #define FDCAN_BATTERY_INFO_ID_BASE   0x04038000U
 #define FDCAN_BATTERY_FAULT_ID_BASE  0x040E8000U
 #define FDCAN_BATTERY_TEMP_ID_BASE   0x04078000U
 #define FDCAN_BATTERY_ID_MASK        0x1FFFFF00U
-#define FDCAN_LEG_CURRENT_REPORT_ID  0x04100000U
 #define FDCAN_PERIPHERAL_CURRENT_REPORT_ID 0x04200000U
-/* [急停功能已停用]
-#define FDCAN_ESTOP_REPORT_ID        0x04300000U
-#define FDCAN_ESTOP_REPORT_PERIOD_MS 50U
-*/
 #define FDCAN_BATTERY_ALARM_REPORT_ID 0x04400000U
 #define FDCAN_CURRENT_REPORT_PERIOD_MS 200U
 #define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 100U
@@ -60,18 +52,7 @@ static uint8_t bat2ProhibitDebounceCount = 0U;
 static uint8_t bat2UnknownDebounceCount = 0U;
 static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t currentReportLastTxTick = 0U;
-/* static uint32_t estopReportLastTxTick = 0U; // [急停功能已停用] */
 static uint32_t batteryAlarmReportLastTxTick = 0U;
-
-typedef struct
-{
-  uint8_t valid;
-  uint32_t id;
-  uint32_t dataLength;
-  uint8_t data[8];
-} FDCAN_ChargeReplyFrame_t;
-
-static FDCAN_ChargeReplyFrame_t batteryChargeReplyFrames[2][3];
 volatile uint32_t battery_can_forward_count = 0U;
 volatile uint32_t battery_can_forward_drop_count = 0U;
 volatile float battery1_can_sum_voltage = 0.0f;
@@ -100,10 +81,6 @@ volatile BmsDischargeMosState_t battery2_bms_discharge_state = BMS_DISCHARGE_MOS
 volatile uint32_t battery2_can_mos_rx_id = 0U;
 volatile uint32_t battery2_can_mos_rx_count = 0U;
 volatile uint32_t battery2_can_mos_last_rx_tick = 0U;
-volatile uint32_t charger_can_rx_count = 0U;
-volatile uint32_t charger_can_rx_id = 0U;
-volatile uint32_t charger_can_last_rx_tick = 0U;
-volatile uint32_t charger_can_rx_interval_ms = 0U;
 volatile uint8_t rk_charge_mode_request = 0U;
 volatile uint8_t charge_mode_active = 0U;
 volatile RkIndicatorControl_t rkIndicatorCtrl = {0};
@@ -134,7 +111,7 @@ typedef enum
   FDCAN_BUSOFF_STATE_RECOVERING = 4U      /* 持续非阻塞等待 129 × 11 bit 隐性位同步完成 */
 } FDCAN_BusOffState_t;
 
-/* 分别为 FDCAN1, FDCAN2, FDCAN3 定义恢复状态变量 */
+/* 分别为 FDCAN1, FDCAN2 定义恢复状态变量（单电池版本停用 FDCAN3） */
 #define DEFINE_FDCAN_BUSOFF_VARS(idx) \
   static volatile uint8_t fdcan##idx##_busoff_flag = 0U; \
   static volatile uint32_t fdcan##idx##_busoff_generation = 0U; \
@@ -149,7 +126,6 @@ typedef enum
 
 DEFINE_FDCAN_BUSOFF_VARS(1)
 DEFINE_FDCAN_BUSOFF_VARS(2)
-DEFINE_FDCAN_BUSOFF_VARS(3)
 
 static uint8_t FDCAN_VerifyRecovery(const FDCAN_GlobalTypeDef *instance, const FDCAN_HandleTypeDef *hfdcan)
 {
@@ -356,11 +332,6 @@ void FDCAN_CheckAndRecoverAllBusOff(void)
                               &fdcan2_busoff_state, &fdcan2_busoff_recovery_count,
                               &fdcan2_busoff_recovery_fail_count,
                               &fdcan2_last_psr, &fdcan2_last_ecr, now);
-    FDCAN_HandleInstanceBusOff(&hfdcan3, FDCAN3, &fdcan3_busoff_flag, &fdcan3_busoff_generation,
-                              &fdcan3BusoffDetectTick, &fdcan3StateTick, &fdcan3SyncStartTick,
-                              &fdcan3_busoff_state, &fdcan3_busoff_recovery_count,
-                              &fdcan3_busoff_recovery_fail_count,
-                              &fdcan3_last_psr, &fdcan3_last_ecr, now);
   }
 }
 
@@ -433,43 +404,27 @@ static HAL_StatusTypeDef FDCAN_SendCurrentReport(uint32_t identifier, const uint
 
 static void FDCAN_SendCurrentReportsToRk(void)
 {
-  uint8_t legCurrentData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
   uint8_t peripheralCurrentData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
-
-  FDCAN_PackInt16LittleEndian(legCurrentData, 0U, FDCAN_CurrentToCanRaw(ADC_GetLeg1Current()));
-  FDCAN_PackInt16LittleEndian(legCurrentData, 2U, FDCAN_CurrentToCanRaw(ADC_GetLeg2Current()));
-  FDCAN_PackInt16LittleEndian(legCurrentData, 4U, FDCAN_CurrentToCanRaw(ADC_GetLeg3Current()));
-  FDCAN_PackInt16LittleEndian(legCurrentData, 6U, FDCAN_CurrentToCanRaw(ADC_GetLeg4Current()));
 
   FDCAN_PackInt16LittleEndian(peripheralCurrentData,
                               0U,
                               FDCAN_CurrentToCanRaw(ADC_GetPeripheralDischargeCurrent()));
 
-  (void)FDCAN_SendCurrentReport(FDCAN_LEG_CURRENT_REPORT_ID, legCurrentData);
   (void)FDCAN_SendCurrentReport(FDCAN_PERIPHERAL_CURRENT_REPORT_ID, peripheralCurrentData);
 }
-
-/* [急停功能已停用，硬件未连接]
-static void FDCAN_SendEmergencyStopReportToRk(void)
-{
-  uint8_t estopData[8] = {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
-
-  (void)FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
-}
-*/
 
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
 {
   uint8_t alarmData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
 
   alarmData[0] = Power_GetBattery1AlarmStatus();
-  alarmData[1] = Power_GetBattery2AlarmStatus();
+  alarmData[1] = BATTERY_ALARM_STATUS_REMOVED; /* 0x02: 单电池版本电池 2 恒为未连接/拔出 */
   alarmData[2] = bat1_discharge_mos_state;
   alarmData[3] = bat1_recharge_mos_state;
-  alarmData[4] = bat2_discharge_mos_state;
-  alarmData[5] = bat2_recharge_mos_state;
-  alarmData[6] = bat1_charge_mos_state;
-  alarmData[7] = bat2_charge_mos_state;
+  alarmData[4] = 0U;
+  alarmData[5] = 0U;
+  alarmData[6] = 0U;
+  alarmData[7] = 0U;
 
   return FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
 }
@@ -524,9 +479,7 @@ static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
     FDCAN_BATTERY_MOS_ID_BASE,
     FDCAN_BATTERY_INFO_ID_BASE,
     FDCAN_BATTERY_FAULT_ID_BASE,
-    FDCAN_BATTERY_TEMP_ID_BASE,
-    FDCAN_BATTERY_CHARGE_REPLY_INFO_ID_BASE,
-    FDCAN_BATTERY_CHARGE_REPLY_TEMP_ID_BASE
+    FDCAN_BATTERY_TEMP_ID_BASE
   };
   FDCAN_FilterTypeDef filterConfig;
   uint32_t filterIndex;
@@ -547,17 +500,7 @@ static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
     }
   }
 
-  if (hfdcan->Instance == FDCAN3)
-  {
-    filterConfig.FilterIndex = filterIndex;
-    filterConfig.FilterID1 = FDCAN_CHARGE_MODE_CMD_ID;
-    filterConfig.FilterID2 = 0x1FFFFFFFU;
 
-    if (HAL_FDCAN_ConfigFilter(hfdcan, &filterConfig) != HAL_OK)
-    {
-      Error_Handler();
-    }
-  }
 }
 
 static void FDCAN_ConfigRkRxFilters(void)
@@ -593,54 +536,6 @@ static void FDCAN_ConfigRkRxFilters(void)
   {
     Error_Handler();
   }
-}
-
-static uint8_t FDCAN_GetChargeReplyFrameSlot(uint32_t rxId, uint8_t *slot)
-{
-  uint32_t idBase = rxId & FDCAN_BATTERY_ID_MASK;
-
-  if (idBase == FDCAN_BATTERY_CHARGE_REPLY_STATUS_ID_BASE)
-  {
-    *slot = 0U;
-    return 1U;
-  }
-
-  if (idBase == FDCAN_BATTERY_CHARGE_REPLY_INFO_ID_BASE)
-  {
-    *slot = 1U;
-    return 1U;
-  }
-
-  if (idBase == FDCAN_BATTERY_CHARGE_REPLY_TEMP_ID_BASE)
-  {
-    *slot = 2U;
-    return 1U;
-  }
-
-  return 0U;
-}
-
-static void FDCAN_CacheChargeReplyFrame(uint8_t batteryIndex,
-                                        const FDCAN_RxHeaderTypeDef *rxHeader,
-                                        const uint8_t rxData[])
-{
-  FDCAN_ChargeReplyFrame_t *frame;
-  uint8_t slot;
-
-  if ((batteryIndex < 1U) ||
-      (batteryIndex > 2U) ||
-      (rxHeader->IdType != FDCAN_EXTENDED_ID) ||
-      (rxHeader->RxFrameType != FDCAN_DATA_FRAME) ||
-      (FDCAN_GetChargeReplyFrameSlot(rxHeader->Identifier, &slot) == 0U))
-  {
-    return;
-  }
-
-  frame = &batteryChargeReplyFrames[batteryIndex - 1U][slot];
-  frame->valid = 1U;
-  frame->id = rxHeader->Identifier;
-  frame->dataLength = rxHeader->DataLength;
-  (void)memcpy(frame->data, rxData, sizeof(frame->data));
 }
 
 static uint8_t FDCAN_IsBatteryForwardFrame(uint32_t rxId)
@@ -896,31 +791,8 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
       return;
     }
 
-    if ((hfdcan->Instance == FDCAN3) &&
-        (rxHeader.IdType == FDCAN_EXTENDED_ID) &&
-        (rxHeader.Identifier == FDCAN_CHARGE_MODE_CMD_ID))
-    {
-      uint32_t now = HAL_GetTick();
-      if (charger_can_last_rx_tick != 0U)
-      {
-        charger_can_rx_interval_ms = now - charger_can_last_rx_tick;
-      }
-      charger_can_rx_id = rxHeader.Identifier;
-      FDCAN_IncrementDebugCounter(&charger_can_rx_count);
-      charger_can_last_rx_tick = now;
 
-      if ((rk_charge_mode_request != 0U) && (charge_mode_active == 0U))
-      {
-        if (Power_EnterChargeMode() == HAL_OK)
-        {
-          charge_mode_active = 1U;
-          FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_ENTER);
-        }
-      }
-      continue;
-    }
 
-    FDCAN_CacheChargeReplyFrame(batteryIndex, &rxHeader, rxData);
     FDCAN_ForwardBatteryFrameToRk(batteryIndex, &rxHeader, rxData);
 
     if ((rxHeader.IdType == FDCAN_EXTENDED_ID) &&
@@ -1081,7 +953,6 @@ void FDCAN_IAP_JumpToBootloader(void)
 
   /* 6. 停止无关通信外设 */
   (void)HAL_FDCAN_Stop(&hfdcan1);
-  (void)HAL_FDCAN_Stop(&hfdcan3);
   (void)HAL_UART_DeInit(&huart2);
 
   /* 7. 停止 FDCAN2 */
@@ -1222,83 +1093,6 @@ static void FDCAN_PollRkRx(void)
   }
 }
 
-HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex)
-{
-  FDCAN_TxHeaderTypeDef txHeader;
-  HAL_StatusTypeDef result = HAL_OK;
-  uint8_t sentFrameCount = 0U;
-  uint8_t slot;
-  uint32_t primask;
-
-  if ((batteryIndex < 1U) || (batteryIndex > 2U))
-  {
-    return HAL_ERROR;
-  }
-
-  /* 快速预检（无锁） */
-  if (fdcan3_busoff_flag != 0U)
-  {
-    return HAL_BUSY;
-  }
-
-  for (slot = 0U; slot < 3U; slot++)
-  {
-    FDCAN_ChargeReplyFrame_t *frame = &batteryChargeReplyFrames[batteryIndex - 1U][slot];
-
-    if (frame->valid == 0U)
-    {
-      continue;
-    }
-
-    if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
-    {
-      result = HAL_BUSY;
-      break;
-    }
-
-    /* 配置 txHeader（不需要在临界区内） */
-    txHeader.Identifier = (frame->id & 0x00FFFFFFU) | 0x05000000U;
-    txHeader.IdType = FDCAN_EXTENDED_ID;
-    txHeader.TxFrameType = FDCAN_DATA_FRAME;
-    txHeader.DataLength = frame->dataLength;
-    txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    txHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    txHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    txHeader.MessageMarker = batteryIndex;
-
-    /* 临界区保护：原子检查标志与入队 */
-    primask = __get_PRIMASK();
-    __disable_irq();
-    if (fdcan3_busoff_flag != 0U)
-    {
-      __set_PRIMASK(primask);
-      return HAL_BUSY;
-    }
-
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, frame->data) == HAL_OK)
-    {
-      sentFrameCount++;
-    }
-    else
-    {
-      result = HAL_ERROR;
-    }
-    __set_PRIMASK(primask);
-  }
-
-  if (sentFrameCount != 0U)
-  {
-    result = HAL_OK;
-  }
-  else
-  {
-    result = HAL_ERROR;
-  }
-
-  return result;
-}
-
 __attribute__((unused))
 static HAL_StatusTypeDef FDCAN_SendBatteryWakeFrame(FDCAN_HandleTypeDef *hfdcan, uint8_t marker)
 {
@@ -1313,15 +1107,14 @@ static HAL_StatusTypeDef FDCAN_SendBatteryWakeFrame(FDCAN_HandleTypeDef *hfdcan,
     return HAL_ERROR;
   }
 
-  /* 只允许 FDCAN1/3 调用此函数（FDCAN2 用于上位机上报，不发送唤醒帧） */
-  if ((hfdcan != &hfdcan1) && (hfdcan != &hfdcan3))
+  /* 只允许 FDCAN1 调用此函数（FDCAN2 用于上位机上报，单电池版本不使用 FDCAN3） */
+  if (hfdcan != &hfdcan1)
   {
     return HAL_ERROR;
   }
 
   /* 快速预检（无锁） */
-  if ((hfdcan == &hfdcan1 && fdcan1_busoff_flag != 0U) ||
-      (hfdcan == &hfdcan3 && fdcan3_busoff_flag != 0U))
+  if (fdcan1_busoff_flag != 0U)
   {
     return HAL_BUSY;
   }
@@ -1345,8 +1138,7 @@ static HAL_StatusTypeDef FDCAN_SendBatteryWakeFrame(FDCAN_HandleTypeDef *hfdcan,
   /* 临界区保护：原子检查标志与入队 */
   primask = __get_PRIMASK();
   __disable_irq();
-  if ((hfdcan == &hfdcan1 && fdcan1_busoff_flag != 0U) ||
-      (hfdcan == &hfdcan3 && fdcan3_busoff_flag != 0U))
+  if (fdcan1_busoff_flag != 0U)
   {
     __set_PRIMASK(primask);
     return HAL_BUSY;
@@ -1365,7 +1157,7 @@ void FDCAN_BatteryCanStart(void)
   }
 
   FDCAN_ConfigBatteryRxFilters(&hfdcan1);
-  FDCAN_ConfigBatteryRxFilters(&hfdcan3);
+  /* 单电池版本：未接入电池 2 且暂不使用充电桩，不启动 FDCAN3 */
   FDCAN_ConfigRkRxFilters();
 
   if (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)
@@ -1378,15 +1170,9 @@ void FDCAN_BatteryCanStart(void)
     Error_Handler();
   }
 
-  if (HAL_FDCAN_Start(&hfdcan3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /* 使能 Bus-Off 中断 */
+  /* 使能 Bus-Off 中断 (仅 FDCAN1 与 FDCAN2) */
   (void)HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_BUS_OFF, 0U);
   (void)HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_BUS_OFF, 0U);
-  (void)HAL_FDCAN_ActivateNotification(&hfdcan3, FDCAN_IT_BUS_OFF, 0U);
 
   batteryCanStarted = 1U;
   bat1AllowedDebounceCount = 0U;
@@ -1397,20 +1183,14 @@ void FDCAN_BatteryCanStart(void)
   bat2UnknownDebounceCount = 0U;
   batteryCanLastTxTick = HAL_GetTick() - FDCAN_BATTERY_WAKE_PERIOD_MS;
   currentReportLastTxTick = HAL_GetTick();
-  /* estopReportLastTxTick = HAL_GetTick() - FDCAN_ESTOP_REPORT_PERIOD_MS; // [急停功能已停用] */
   batteryAlarmReportLastTxTick = HAL_GetTick() - FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS;
-}//负责初始化接收过滤器并启动 CAN。
+}
 
 void FDCAN_BatteryCanTask(void)
 {
   static uint8_t prevBat1Alarm = BATTERY_ALARM_STATUS_NORMAL;
-  static uint8_t prevBat2Alarm = BATTERY_ALARM_STATUS_NORMAL;
   static uint8_t prevBat1DischargeMos = 0U;
   static uint8_t prevBat1RechargeMos = 0U;
-  static uint8_t prevBat1ChargeMos = 0U;
-  static uint8_t prevBat2DischargeMos = 0U;
-  static uint8_t prevBat2RechargeMos = 0U;
-  static uint8_t prevBat2ChargeMos = 0U;
   static uint8_t alarmClearBurstRemaining = 0U;
   static uint8_t mosChangedPending = 0U;
 
@@ -1425,46 +1205,18 @@ void FDCAN_BatteryCanTask(void)
 
   FDCAN_PollRkRx();
   FDCAN_PollBatteryRx(&hfdcan1, 1U);
-  FDCAN_PollBatteryRx(&hfdcan3, 2U);
-
-  /* 充电桩通信超时监测：在充电激活状态下，若超过 FDCAN_CHARGER_CAN_TIMEOUT_MS（当前3000ms）未收到充电桩握手帧（拔枪或充电机断电），自动退出充电模式 */
-  now = HAL_GetTick();  /* 在超时判断前刷新 now，消除与 PollBatteryRx 内部更新 charger_can_last_rx_tick 的时序下溢 */
-  if (charge_mode_active != 0U)
-  {
-    uint32_t elapsed = now - charger_can_last_rx_tick;
-    if ((charger_can_last_rx_tick != 0U) && (elapsed < 0x80000000U) && (elapsed >= FDCAN_CHARGER_CAN_TIMEOUT_MS))
-    {
-      rk_charge_mode_request = 0U;
-      charge_mode_active = 0U;
-      Power_ExitChargeMode();
-      FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_EXIT);
-    }
-  }
+  /* 单电池版本：不轮询 FDCAN3 */
 
   /* RK 上报统一门禁：FDCAN2 Bus-Off 期间跳过所有向 RK 的上报，避免无效计算 */
   if (fdcan2_busoff_flag == 0U)
   {
-    /* [急停功能已停用，硬件未连接]
-    if ((Power_IsEmergencyStopActive() != 0U) &&
-        ((now - estopReportLastTxTick) >= FDCAN_ESTOP_REPORT_PERIOD_MS))
-    {
-      estopReportLastTxTick = now;
-      FDCAN_SendEmergencyStopReportToRk();
-    }
-    */
-
     uint8_t curBat1Alarm = Power_GetBattery1AlarmStatus();
-    uint8_t curBat2Alarm = Power_GetBattery2AlarmStatus();
-    uint8_t hasAlarm = ((curBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
-                        (curBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
+    /* 单电池版本：整机异常告警仅由电池 1 决定，电池 2 未插属于正常硬件配置 */
+    uint8_t hasAlarm = (curBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ? 1U : 0U;
 
-    /* 监测本地 MOS 状态是否发生跳变（放电、回充、充电 MOS） */
+    /* 监测本地 MOS 状态是否发生跳变（放电、回充 MOS） */
     uint8_t mosChanged = ((bat1_discharge_mos_state != prevBat1DischargeMos) ||
-                          (bat1_recharge_mos_state != prevBat1RechargeMos) ||
-                          (bat1_charge_mos_state != prevBat1ChargeMos) ||
-                          (bat2_discharge_mos_state != prevBat2DischargeMos) ||
-                          (bat2_recharge_mos_state != prevBat2RechargeMos) ||
-                          (bat2_charge_mos_state != prevBat2ChargeMos)) ? 1U : 0U;
+                          (bat1_recharge_mos_state != prevBat1RechargeMos)) ? 1U : 0U;
 
     if (mosChanged != 0U)
     {
@@ -1472,21 +1224,14 @@ void FDCAN_BatteryCanTask(void)
     }
 
     /* 检测是否从有报警恢复到全正常 */
-    if ((hasAlarm == 0U) &&
-        ((prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
-         (prevBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)))
+    if ((hasAlarm == 0U) && (prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL))
     {
       alarmClearBurstRemaining = FDCAN_BATTERY_ALARM_CLEAR_BURST_COUNT;
     }
 
     prevBat1Alarm = curBat1Alarm;
-    prevBat2Alarm = curBat2Alarm;
     prevBat1DischargeMos = bat1_discharge_mos_state;
     prevBat1RechargeMos = bat1_recharge_mos_state;
-    prevBat1ChargeMos = bat1_charge_mos_state;
-    prevBat2DischargeMos = bat2_discharge_mos_state;
-    prevBat2RechargeMos = bat2_recharge_mos_state;
-    prevBat2ChargeMos = bat2_charge_mos_state;
 
     /* 
      * 状态上报优先级决策：
@@ -1569,7 +1314,7 @@ void FDCAN_BatteryCanTask(void)
 
   batteryCanLastTxTick = now;
   (void)FDCAN_SendBatteryWakeFrame(&hfdcan1, 1U);
-  (void)FDCAN_SendBatteryWakeFrame(&hfdcan3, 2U);
+  /* 单电池版本：未接电池 2，不向 FDCAN3 发送唤醒帧，彻底杜绝无 ACK 引发 Bus-Off */
 #endif
 }//负责初始化接收过滤器并启动 CAN。
 
@@ -1602,15 +1347,7 @@ void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorSt
         fdcan2_last_psr = psr_snapshot;
         fdcan2_last_ecr = hfdcan->Instance->ECR;
       }
-      else if (hfdcan->Instance == FDCAN3)
-      {
-        fdcan3_busoff_generation++;
-        fdcan3_busoff_flag = 1U;
-        fdcan3_busoff_state = FDCAN_BUSOFF_STATE_PENDING;
-        fdcan3BusoffDetectTick = now;
-        fdcan3_last_psr = psr_snapshot;
-        fdcan3_last_ecr = hfdcan->Instance->ECR;
-      }
+
     }
   }
 }
@@ -1619,7 +1356,6 @@ void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorSt
 
 FDCAN_HandleTypeDef hfdcan1;
 FDCAN_HandleTypeDef hfdcan2;
-FDCAN_HandleTypeDef hfdcan3;
 
 /* FDCAN1 init function */
 void MX_FDCAN1_Init(void)
@@ -1695,44 +1431,6 @@ void MX_FDCAN2_Init(void)
   /* USER CODE BEGIN FDCAN2_Init 2 */
 
   /* USER CODE END FDCAN2_Init 2 */
-
-}
-/* FDCAN3 init function */
-void MX_FDCAN3_Init(void)
-{
-
-  /* USER CODE BEGIN FDCAN3_Init 0 */
-
-  /* USER CODE END FDCAN3_Init 0 */
-
-  /* USER CODE BEGIN FDCAN3_Init 1 */
-
-  /* USER CODE END FDCAN3_Init 1 */
-  hfdcan3.Instance = FDCAN3;
-  hfdcan3.Init.ClockDivider = FDCAN_CLOCK_DIV1;
-  hfdcan3.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
-  hfdcan3.Init.Mode = FDCAN_MODE_NORMAL;
-  hfdcan3.Init.AutoRetransmission = ENABLE;
-  hfdcan3.Init.TransmitPause = DISABLE;
-  hfdcan3.Init.ProtocolException = DISABLE;
-  hfdcan3.Init.NominalPrescaler = 40;
-  hfdcan3.Init.NominalSyncJumpWidth = 1;
-  hfdcan3.Init.NominalTimeSeg1 = 13;
-  hfdcan3.Init.NominalTimeSeg2 = 3;
-  hfdcan3.Init.DataPrescaler = 1;
-  hfdcan3.Init.DataSyncJumpWidth = 1;
-  hfdcan3.Init.DataTimeSeg1 = 1;
-  hfdcan3.Init.DataTimeSeg2 = 1;
-  hfdcan3.Init.StdFiltersNbr = 1;
-  hfdcan3.Init.ExtFiltersNbr = 8;
-  hfdcan3.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
-  if (HAL_FDCAN_Init(&hfdcan3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN FDCAN3_Init 2 */
-
-  /* USER CODE END FDCAN3_Init 2 */
 
 }
 
@@ -1827,56 +1525,6 @@ void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef* fdcanHandle)
 
   /* USER CODE END FDCAN2_MspInit 1 */
   }
-  else if(fdcanHandle->Instance==FDCAN3)
-  {
-  /* USER CODE BEGIN FDCAN3_MspInit 0 */
-
-  /* USER CODE END FDCAN3_MspInit 0 */
-
-  /** Initializes the peripherals clocks
-  */
-    PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_FDCAN;
-    PeriphClkInit.FdcanClockSelection = RCC_FDCANCLKSOURCE_PCLK1;
-    if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
-    {
-      Error_Handler();
-    }
-
-    /* FDCAN3 clock enable */
-    HAL_RCC_FDCAN_CLK_ENABLED++;
-    if(HAL_RCC_FDCAN_CLK_ENABLED==1){
-      __HAL_RCC_FDCAN_CLK_ENABLE();
-    }
-
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    /**FDCAN3 GPIO Configuration
-    PA8     ------> FDCAN3_RX
-    PB4     ------> FDCAN3_TX
-    */
-    GPIO_InitStruct.Pin = GPIO_PIN_8;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF11_FDCAN3;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_4;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF11_FDCAN3;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-    /* FDCAN3 interrupt Init */
-    HAL_NVIC_SetPriority(FDCAN3_IT0_IRQn, 0, 0);
-    HAL_NVIC_EnableIRQ(FDCAN3_IT0_IRQn);
-    HAL_NVIC_SetPriority(FDCAN3_IT1_IRQn, 0, 0);
-    HAL_NVIC_EnableIRQ(FDCAN3_IT1_IRQn);
-  /* USER CODE BEGIN FDCAN3_MspInit 1 */
-
-  /* USER CODE END FDCAN3_MspInit 1 */
-  }
 }
 
 void HAL_FDCAN_MspDeInit(FDCAN_HandleTypeDef* fdcanHandle)
@@ -1930,32 +1578,6 @@ void HAL_FDCAN_MspDeInit(FDCAN_HandleTypeDef* fdcanHandle)
 
   /* USER CODE END FDCAN2_MspDeInit 1 */
   }
-  else if(fdcanHandle->Instance==FDCAN3)
-  {
-  /* USER CODE BEGIN FDCAN3_MspDeInit 0 */
-
-  /* USER CODE END FDCAN3_MspDeInit 0 */
-    /* Peripheral clock disable */
-    HAL_RCC_FDCAN_CLK_ENABLED--;
-    if(HAL_RCC_FDCAN_CLK_ENABLED==0){
-      __HAL_RCC_FDCAN_CLK_DISABLE();
-    }
-
-    /**FDCAN3 GPIO Configuration
-    PA8     ------> FDCAN3_RX
-    PB4     ------> FDCAN3_TX
-    */
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_8);
-
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_4);
-
-    /* FDCAN3 interrupt Deinit */
-    HAL_NVIC_DisableIRQ(FDCAN3_IT0_IRQn);
-    HAL_NVIC_DisableIRQ(FDCAN3_IT1_IRQn);
-  /* USER CODE BEGIN FDCAN3_MspDeInit 1 */
-
-  /* USER CODE END FDCAN3_MspDeInit 1 */
-  }
 }
 
 /* USER CODE BEGIN 1 */
@@ -2004,8 +1626,8 @@ uint8_t FDCAN_IsAnyBusOff(void)
   /* 稳压电源测试模式下，可能未连接任何 CAN 从机节点，屏蔽 Bus-Off 报警避免指示灯闪烁 */
   return 0U;
 #else
-  /* 统一信任中断与 100ms 兜底状态机同步维护的软件标志，避免在主循环高频直读 PSR 导致 PSR.LEC 被清零 */
-  return ((fdcan1_busoff_flag != 0U) || (fdcan2_busoff_flag != 0U) || (fdcan3_busoff_flag != 0U)) ? 1U : 0U;
+  /* 单电池版本：仅监测活动总线 FDCAN1 与 FDCAN2 */
+  return ((fdcan1_busoff_flag != 0U) || (fdcan2_busoff_flag != 0U)) ? 1U : 0U;
 #endif
 }
 

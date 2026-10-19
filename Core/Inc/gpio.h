@@ -32,7 +32,6 @@ extern "C" {
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN Private defines */
-/* USER CODE BEGIN Private defines */
 /* ==================== 电池包1 MOS 控制引脚 ==================== */
 #define BAT1_DISCHARGE_MOS_GPIO_Port       GPIOB
 #define BAT1_DISCHARGE_MOS_Pin             GPIO_PIN_6   /* PB6: 主放电 MOS */
@@ -105,21 +104,13 @@ extern "C" {
 #define BUZZER_ALARM_GPIO_Port             GPIOC
 #define BUZZER_ALARM_Pin                   GPIO_PIN_13  /* PC13: 蜂鸣器 */
 
-/* 急停输入（已停用，硬件未连接）
-#define EMERGENCY_STOP_GPIO_Port           GPIOD
-#define EMERGENCY_STOP_Pin                 GPIO_PIN_2   // PD2: 急停输入 (来自运控板光耦)
-*/
-
 /* 默认按高电平打开 MOS；如果硬件是低电平有效，需要改这里 */
 #define POWER_SWITCH_ON                    GPIO_PIN_SET
 #define POWER_SWITCH_OFF                   GPIO_PIN_RESET
 /* DCDC 电源使能控制：硬件为低电平使能 (Active-Low) */
 #define POWER_DCDC_ON                      GPIO_PIN_RESET
 #define POWER_DCDC_OFF                     GPIO_PIN_SET
-/* 急停有效电平与消抖参数（已停用）
-#define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_RESET
-#define POWER_ESTOP_DEBOUNCE_MS            30U
-*/
+
 /* 预放电等待时间，单位 ms */
 #define POWER_PRE_DISCHARGE_DELAY_MS       400U
 /* 主放电 MOS 打开后预充 MOS 延时关闭时间（重叠导通缓冲），单位 ms */
@@ -127,21 +118,13 @@ extern "C" {
 #define POWER_PRE_DISCHARGE_DELAY          POWER_PRE_DISCHARGE_OVERLAP_MS
 /* CAN 超过该时间未收到状态帧时，认为电池通信掉线 */
 #define POWER_BATTERY_CAN_TIMEOUT_MS       2000U
-/* 双电池回充 MOS 切换阈值，两个电池压差超过该值时只开高电压电池回充 */
-#define POWER_RECHARGE_BALANCE_DIFF        0.10f
-/* 充电模式下双电池压差在该阈值内时双开充电回路 */
-#define POWER_CHARGE_BALANCE_DIFF          0.10f
-/* 充电模式下向 CAN2 发送所选低压电池回复帧的周期 (ms) */
-#define POWER_CHARGE_REPLY_PERIOD_MS       200U
-/* 关低压回充 MOS 后，等待控制脚读回 OFF 的超时时间 */
-#define POWER_RECHARGE_SWITCH_TIMEOUT_MS   5U
-/* 双回充 MOS 打开后，某路电流占总电流低于该比例，认为疑似未放电 */
-#define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
+/* 上电开机宽限期 (ms)：上电初始 4000ms 内等待 BMS 首包到达，避免刚上电瞬态误报警 */
+#define POWER_BATTERY_BOOT_GRACE_PERIOD_MS 4000U
 
 /* VBUS 泄放动作阈值：放电模式下超过 85V 通过 TIM8 互补 PWM (50%) 开启交替斩波泄放；回落至 84V 关闭 (1V滞回防抖) */
-#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    85.0f
-#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   84.0f
-#define POWER_VBUS_RELEASE_PWM_DUTY        50U   /* TIM8_CH2/CH2N 互补 PWM 占空比 50% (ARR=99, Pulse=50) */
+#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    999.0f
+#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   999.0f
+#define POWER_VBUS_RELEASE_PWM_DUTY        0U   /* TIM8_CH2/CH2N 互补 PWM 占空比 50% (ARR=99, Pulse=50) */
 
 /* 电池异常报警状态定义 */
 #define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常在线 */
@@ -219,13 +202,9 @@ void Power_ExitDischargeMode(void);
 HAL_StatusTypeDef Power_EnterChargeMode(void);
 void Power_ExitChargeMode(void);
 void Power_UpdateVbusPowerRelease(void);
-/* 急停检测函数（已停用，硬件未连接）
-GPIO_PinState Power_ReadEmergencyStop(void);
-uint8_t Power_IsEmergencyStopActive(void);
-*/
 uint8_t Power_GetBattery1AlarmStatus(void);
 uint8_t Power_GetBattery2AlarmStatus(void);
-uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex);
+uint8_t Power_IsLocalFaultAlarmActive(void);
 
 /* 辅助外设控制 API */
 void Power_SetDcdc12V(uint8_t enable);
@@ -234,7 +213,6 @@ void Power_SetRgyLed(uint8_t r, uint8_t g, uint8_t y);
 void Power_SetRgbLed(uint8_t r, uint8_t g, uint8_t b);
 void Power_SetBuzzer(uint8_t on);
 void Power_UpdateStatusIndicators(void);
-void Power_UpdateStatusLed(void);
 void Power_UpdateBoardLeds(void);
 
 uint8_t Power_GetPhysicalR(void);

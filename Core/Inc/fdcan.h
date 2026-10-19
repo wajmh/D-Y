@@ -36,15 +36,12 @@ extern FDCAN_HandleTypeDef hfdcan1;
 
 extern FDCAN_HandleTypeDef hfdcan2;
 
-extern FDCAN_HandleTypeDef hfdcan3;
-
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
 
 void MX_FDCAN1_Init(void);
 void MX_FDCAN2_Init(void);
-void MX_FDCAN3_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 /* BMS 上报内部放电 MOS 明确状态枚举 */
@@ -83,28 +80,18 @@ extern volatile BmsDischargeMosState_t battery2_bms_discharge_state;
 extern volatile uint32_t battery2_can_mos_rx_id;
 extern volatile uint32_t battery2_can_mos_rx_count;
 extern volatile uint32_t battery2_can_mos_last_rx_tick;
-extern volatile uint32_t charger_can_rx_count;
-extern volatile uint32_t charger_can_rx_id;
-extern volatile uint32_t charger_can_last_rx_tick;
-extern volatile uint32_t charger_can_rx_interval_ms;
 extern volatile uint8_t rk_charge_mode_request;
 extern volatile uint8_t charge_mode_active;
-
-void MX_FDCAN1_Init(void);
-void MX_FDCAN2_Init(void);
-void MX_FDCAN3_Init(void);
 
 #define FDCAN_BATTERY_ALARM_REPORT_ID            0x04400000U
 #define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS     100U
 #define FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS  100U
 #define FDCAN_BATTERY_ALARM_CLEAR_BURST_COUNT    10U
 
-#define FDCAN_CHARGE_MODE_CMD_ID                 0x0500FF80U
 #define FDCAN_RK_CHARGE_MODE_CMD_ID              0x04500000U
 #define FDCAN_RK_CHARGE_MODE_STATUS_ID           0x04500001U
 #define FDCAN_CHARGE_MODE_EXIT                   0x00U
 #define FDCAN_CHARGE_MODE_ENTER                  0x01U
-#define FDCAN_CHARGER_CAN_TIMEOUT_MS             3000U
 
 /* 小脑声光控制接口协议定义 */
 #define FDCAN_RK_INDICATOR_CMD_ID                0x04600000U
@@ -150,7 +137,7 @@ typedef enum
 /* App 固件版本号定义 (三位版本: Major.Minor.Patch，例如 v1.4.0) */
 #define APP_FW_VERSION_MAJOR                     1U
 #define APP_FW_VERSION_MINOR                     4U
-#define APP_FW_VERSION_PATCH                     0U
+#define APP_FW_VERSION_PATCH                     1U
 
 void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData);
 void FDCAN_IAP_JumpToBootloader(void);
@@ -168,8 +155,6 @@ extern volatile RkIndicatorControl_t rkIndicatorCtrl;
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
-HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex);
-#define FDCAN_SendChargeReplyToCan2 FDCAN_SendChargeReplyToCharger /* 兼容旧命名别名 */
 float FDCAN_GetBatterySoc(uint8_t batteryIndex);
 uint8_t FDCAN_IsBatterySocValid(uint8_t batteryIndex);
 uint8_t FDCAN_IsRkRgbActive(void);
@@ -188,16 +173,12 @@ extern volatile uint32_t fdcan1_busoff_recovery_count;
 extern volatile uint32_t fdcan1_busoff_recovery_fail_count;
 extern volatile uint32_t fdcan2_busoff_recovery_count;
 extern volatile uint32_t fdcan2_busoff_recovery_fail_count;
-extern volatile uint32_t fdcan3_busoff_recovery_count;
-extern volatile uint32_t fdcan3_busoff_recovery_fail_count;
 
 /* Bus-Off 诊断指标（PSR/ECR 快照，用于背景遥测与健康度排查） */
 extern volatile uint32_t fdcan1_last_psr;
 extern volatile uint32_t fdcan1_last_ecr;
 extern volatile uint32_t fdcan2_last_psr;
 extern volatile uint32_t fdcan2_last_ecr;
-extern volatile uint32_t fdcan3_last_psr;
-extern volatile uint32_t fdcan3_last_ecr;
 
 /* USER CODE END Prototypes */
 
