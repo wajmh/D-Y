@@ -55,6 +55,8 @@ static uint8_t battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 static uint8_t battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 static uint8_t powerBootBeepTriggered = 0U;
 static uint32_t powerBootBeepStartTick = 0U;
+static uint32_t vbusLowVoltageStartTick = 0U;
+static uint8_t battery1AbnormalDisconnected = 0U;
 
 volatile uint8_t bat_charge_mos_state = 0U;
 volatile uint8_t bat1_charge_mos_state = 0U;
@@ -199,6 +201,8 @@ void Power_AllMosOff(void)
   powerPreDischargeBatteryIndex = 0U;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  vbusLowVoltageStartTick = 0U;
+  battery1AbnormalDisconnected = 0U;
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
   Power_SetDcdc12V(0U);
   Power_SetDcdc24V(0U);
@@ -210,6 +214,8 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
   powerWorkMode = POWER_WORK_MODE_DISCHARGE;
   battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   battery2AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+  vbusLowVoltageStartTick = 0U;
+  battery1AbnormalDisconnected = 0U;
 
   /* 单电池版本：电池 2 硬件未接入，彻底关闭电池 2 所有 MOS */
   HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
@@ -267,12 +273,17 @@ void Power_DischargeModeTask(void)
 
   /*
    * 单电池版本遥测报警状态判定（仅用于上报小脑，绝不联动切断本地动力供电）：
+   * 0. 处于母线异常断开状态：标记为电池物理拔出/无电压；
    * 1. 最近的 MOS 帧明确禁放：标记为 BMS 禁放；
    * 2. 最近的 MOS 帧状态未知：标记为 BMS 状态未知；
    * 3. 必要 CAN 状态流超时：标记为通信掉线；
    * 4. 正常允许放电或就绪：标记为正常。
    */
-  if (bat1BmsProhibited != 0U)
+  if (battery1AbnormalDisconnected != 0U)
+  {
+    battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+  }
+  else if (bat1BmsProhibited != 0U)
   {
     battery1AlarmStatus = BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE;
   }
@@ -298,15 +309,40 @@ void Power_DischargeModeTask(void)
   battery2Control.state = POWER_BATTERY_STATE_OFF;
 
   /*
-   * 单电池版本放电状态机控制策略（永不断电原则）：
-   * 只要 MCU 正常运行，即表明电池 1 必然在供电；
-   * 上电后执行 400ms 预放电软启动防浪涌，完成后闭合主放电 MOS、回充 MOS 并开通 12V/24V DCDC；
-   * 进入放电态 (DISCHARGE) 后，任何时候都绝不切断母线和外设供电！
-   * 避免瞬态大电流采样电压低、CAN 丢包或 BMS 报文波动误切断母线导致机器狗摔倒。
+   * 单电池版本放电状态机控制策略：
+   * 1. 上电冷启动执行 400ms 预放电软启动防浪涌，完成后闭合主放电 MOS、回充 MOS 并开通 12V/24V DCDC；
+   * 2. 进入放电态 (DISCHARGE) 后，实时监测母线电压 VBUS；若持续 20ms 低于 20V，判定为电池异常断开/关断，
+   *    立即切断主放电/回充/预充 MOS 以及 DCDC 和外设供电，回退至 OFF 状态并置位异常断开标志；
+   * 3. 在 OFF 状态下，若经历过异常断开，必须严格等待 BMS 通信恢复且允许放电，才重新启动 400ms 预放电，
+   *    彻底消除快速断开又合闸瞬间无预充导致的硬短路冲击与打火。
    */
   if (battery1Control.state == POWER_BATTERY_STATE_OFF)
   {
-    Power_StartBattery1PreDischarge();
+    if (battery1AbnormalDisconnected != 0U)
+    {
+      /* 经历过异常断开：先检测 VBUS 是否恢复，恢复后先打开外设供电以恢复 CAN 通信能力 */
+      float currentVbus = ADC_GetVbusVoltage();
+
+      /* VBUS 电压恢复到正常工作范围，先恢复外设供电和 DCDC 以恢复 CAN 通信 */
+      if (currentVbus >= POWER_VBUS_RECOVERY_THRESHOLD)
+      {
+        HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
+        Power_SetDcdc12V(1U);
+        Power_SetDcdc24V(1U);
+      }
+
+      /* 等待 BMS 通信就绪且允许放电才重新启动预放电 */
+      if ((bat1CanAlive != 0U) && (bat1BmsAllowed != 0U))
+      {
+        battery1AbnormalDisconnected = 0U;
+        Power_StartBattery1PreDischarge();
+      }
+    }
+    else
+    {
+      /* 冷启动模式：在宽限期内直接启动软启动预放电 */
+      Power_StartBattery1PreDischarge();
+    }
   }
   else if (battery1Control.state == POWER_BATTERY_STATE_PRE_DISCHARGE)
   {
@@ -317,6 +353,47 @@ void Power_DischargeModeTask(void)
   }
   else /* POWER_BATTERY_STATE_DISCHARGE */
   {
+    float currentVbus = ADC_GetVbusVoltage();
+    uint32_t now = HAL_GetTick();
+
+    /* 监测母线欠压（VBUS < 20V 持续 20ms），判定为电池异常断开/关断 */
+    if (currentVbus < POWER_VBUS_UNDER_VOLTAGE_THRESHOLD)
+    {
+      if (vbusLowVoltageStartTick == 0U)
+      {
+        vbusLowVoltageStartTick = now;
+      }
+      else if ((now - vbusLowVoltageStartTick) >= POWER_VBUS_DISCONNECT_DEBOUNCE_MS)
+      {
+        /* 确认异常断开：切断主放电、回充、预充 MOS，并关断 12V/24V DCDC 与外设供电 */
+        HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+        HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+        HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+        HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
+        Power_SetDcdc12V(0U);
+        Power_SetDcdc24V(0U);
+
+        /* 关闭反电势泄放 */
+        __HAL_TIM_MOE_DISABLE(&htim8);
+        __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
+        back_emf_absorb_1_state = 0U;
+        back_emf_absorb_2_state = 0U;
+        back_emf_absorb_state = 0U;
+        backEmfAbsorbReleased = 0U;
+
+        powerPreDischargeBatteryIndex = 0U;
+        battery1Control.state = POWER_BATTERY_STATE_OFF;
+        battery1AbnormalDisconnected = 1U;
+        battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+        vbusLowVoltageStartTick = 0U;
+        return;
+      }
+    }
+    else
+    {
+      vbusLowVoltageStartTick = 0U;
+    }
+
     /* 处于放电状态时，持续确保动力放电 MOS、回充 MOS 和外设供电导通 */
     HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
     HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
@@ -349,6 +426,8 @@ void Power_ExitDischargeMode(void)
   battery2Control.state = POWER_BATTERY_STATE_OFF;
   battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   battery2AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+  vbusLowVoltageStartTick = 0U;
+  battery1AbnormalDisconnected = 0U;
   Power_AllMosOff();
 }
 
