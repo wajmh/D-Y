@@ -57,6 +57,7 @@ static uint8_t powerBootBeepTriggered = 0U;
 static uint32_t powerBootBeepStartTick = 0U;
 static uint32_t vbusLowVoltageStartTick = 0U;
 static uint8_t battery1AbnormalDisconnected = 0U;
+static uint8_t vbusLowVoltageDetected = 0U;
 
 volatile uint8_t bat_charge_mos_state = 0U;
 volatile uint8_t bat1_charge_mos_state = 0U;
@@ -203,6 +204,7 @@ void Power_AllMosOff(void)
   battery2Control.state = POWER_BATTERY_STATE_OFF;
   vbusLowVoltageStartTick = 0U;
   battery1AbnormalDisconnected = 0U;
+  vbusLowVoltageDetected = 0U;
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
   Power_SetDcdc12V(0U);
   Power_SetDcdc24V(0U);
@@ -216,6 +218,7 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
   battery2AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
   vbusLowVoltageStartTick = 0U;
   battery1AbnormalDisconnected = 0U;
+  vbusLowVoltageDetected = 0U;
 
   /* 单电池版本：电池 2 硬件未接入，彻底关闭电池 2 所有 MOS */
   HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
@@ -362,6 +365,7 @@ void Power_DischargeModeTask(void)
       if (vbusLowVoltageStartTick == 0U)
       {
         vbusLowVoltageStartTick = now;
+        vbusLowVoltageDetected = 1U; /* 标记检测到欠压 */
       }
       else if ((now - vbusLowVoltageStartTick) >= POWER_VBUS_DISCONNECT_DEBOUNCE_MS)
       {
@@ -386,8 +390,35 @@ void Power_DischargeModeTask(void)
         battery1AbnormalDisconnected = 1U;
         battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
         vbusLowVoltageStartTick = 0U;
+        vbusLowVoltageDetected = 0U;
         return;
       }
+    }
+    else if (vbusLowVoltageDetected != 0U)
+    {
+      /* 曾经检测到欠压但在20ms内VBUS恢复：立即强制关断并进入异常断开流程，防止无预充硬短路 */
+      HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+      HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
+      HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+      HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
+      Power_SetDcdc12V(0U);
+      Power_SetDcdc24V(0U);
+
+      /* 关闭反电势泄放 */
+      __HAL_TIM_MOE_DISABLE(&htim8);
+      __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
+      back_emf_absorb_1_state = 0U;
+      back_emf_absorb_2_state = 0U;
+      back_emf_absorb_state = 0U;
+      backEmfAbsorbReleased = 0U;
+
+      powerPreDischargeBatteryIndex = 0U;
+      battery1Control.state = POWER_BATTERY_STATE_OFF;
+      battery1AbnormalDisconnected = 1U;
+      battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+      vbusLowVoltageStartTick = 0U;
+      vbusLowVoltageDetected = 0U;
+      return;
     }
     else
     {
@@ -428,6 +459,7 @@ void Power_ExitDischargeMode(void)
   battery2AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
   vbusLowVoltageStartTick = 0U;
   battery1AbnormalDisconnected = 0U;
+  vbusLowVoltageDetected = 0U;
   Power_AllMosOff();
 }
 
