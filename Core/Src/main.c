@@ -112,7 +112,7 @@ int main(void)
     ADC_CalibrateCurrentOffsets();
   }
   ADC_UpdateCurrents();
-  ADC2_UpdateBatteryVoltages();
+  ADC2_UpdateVbusVoltage();
   FDCAN_BatteryCanStart();
   Power_UpdateGpioDebugStates();//mos管的检测
   Power_EnterDischargeMode();//初始化双电池状态 (热接力时跳过预充平滑接管)
@@ -128,10 +128,10 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     ADC_UpdateCurrents();//放电电流的更新
-    ADC2_UpdateBatteryVoltages();//电池电压的更新
-    FDCAN_BatteryCanTask();
-    Power_UpdateGpioDebugStates();
+    ADC2_UpdateVbusVoltage();//母线VBUS电压更新
     Power_ModeTask();
+    Power_UpdateGpioDebugStates();
+    FDCAN_BatteryCanTask();
     Power_UpdateStatusIndicators();//声光状态指示与小脑控制响应
     FDCAN_CheckAndRecoverAllBusOff(); // ★ 纯异步执行恢复状态机
   }

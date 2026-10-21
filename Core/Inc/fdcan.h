@@ -94,10 +94,14 @@ void MX_FDCAN1_Init(void);
 void MX_FDCAN2_Init(void);
 void MX_FDCAN3_Init(void);
 
+#define FDCAN_BUS_TELEMETRY_REPORT_ID            0x04200000U
+#define FDCAN_BUS_TELEMETRY_REPORT_PERIOD_MS     200U
+#define FDCAN_PERIPHERAL_CURRENT_REPORT_ID       FDCAN_BUS_TELEMETRY_REPORT_ID /* 兼容旧别名 */
+#define FDCAN_PERIPHERAL_CURRENT_REPORT_PERIOD_MS FDCAN_BUS_TELEMETRY_REPORT_PERIOD_MS /* 兼容旧别名 */
+
 #define FDCAN_BATTERY_ALARM_REPORT_ID            0x04400000U
-#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS     100U
-#define FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS  100U
-#define FDCAN_BATTERY_ALARM_CLEAR_BURST_COUNT    10U
+#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS     500U
+#define FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS  FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS /* 兼容旧别名：统一 500ms 心跳 */
 
 #define FDCAN_CHARGE_MODE_CMD_ID                 0x0500FF80U
 #define FDCAN_RK_CHARGE_MODE_CMD_ID              0x04500000U
@@ -150,7 +154,7 @@ typedef enum
 /* App 固件版本号定义 (三位版本: Major.Minor.Patch，例如 v1.4.0) */
 #define APP_FW_VERSION_MAJOR                     1U
 #define APP_FW_VERSION_MINOR                     4U
-#define APP_FW_VERSION_PATCH                     0U
+#define APP_FW_VERSION_PATCH                     1U
 
 void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData);
 void FDCAN_IAP_JumpToBootloader(void);
@@ -167,6 +171,8 @@ extern volatile RkIndicatorControl_t rkIndicatorCtrl;
 
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
+HAL_StatusTypeDef FDCAN_SendBusTelemetryReportToRk(void);
+#define FDCAN_SendPeripheralCurrentReportToRk FDCAN_SendBusTelemetryReportToRk /* 兼容旧别名 */
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
 HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex);
 #define FDCAN_SendChargeReplyToCan2 FDCAN_SendChargeReplyToCharger /* 兼容旧命名别名 */

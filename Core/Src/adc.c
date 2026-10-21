@@ -32,12 +32,7 @@ uint16_t adc2_buffer[2];
 float vbus_voltage = 0.0f;
 float peripheral_discharge_current = 0.0f;
 
-/* 兼容保留的全局变量（旧板载采样已移除，数据由 BMS CAN 提供） */
-float battery1_voltage = 0.0f;
-float battery2_voltage = 0.0f;
-float leg_current[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-float battery1_current = 0.0f;
-float battery2_current = 0.0f;
+
 
 #define ADC_CURRENT_OFFSET_SAMPLE_COUNT               500U
 #define ADC_PERIPHERAL_CURRENT_FILTER_ALPHA           0.20f
@@ -129,10 +124,6 @@ void ADC_CalibrateCurrentOffsets(void)
     peripheralDischargeCurrentFilterInitialized = 0U;
 }
 
-void ADC_CalibrateLegCurrentOffsets(void)
-{
-    ADC_CalibrateCurrentOffsets();
-}
 
 void ADC_UpdateCurrents(void)
 {
@@ -161,10 +152,6 @@ void ADC2_UpdateVbusVoltage(void)
                                        &vbusVoltageSampleCount);
 }
 
-void ADC2_UpdateBatteryVoltages(void)
-{
-    ADC2_UpdateVbusVoltage();
-}
 
 float ADC_GetVbusVoltage(void)
 {
@@ -186,23 +173,6 @@ uint16_t ADC2_GetVbusVoltageADC(void)
     return adc2_buffer[1];
 }
 
-/* 兼容接口实现 */
-uint16_t ADC1_GetLegCurrentADC(uint8_t leg) { (void)leg; return 0U; }
-uint16_t ADC1_GetLegCurrentOffsetADC(uint8_t leg) { (void)leg; return 0U; }
-uint16_t ADC1_GetBattery1CurrentADC(void) { return 0U; }
-uint16_t ADC1_GetBattery2CurrentADC(void) { return 0U; }
-uint16_t ADC2_GetPeripheralDischargeCurrentOffsetADC(void) { return peripheralDischargeCurrentOffsetRaw; }
-uint16_t ADC2_GetBattery1ADC(void) { return 0U; }
-uint16_t ADC2_GetBattery2ADC(void) { return 0U; }
-float ADC_GetLegCurrent(uint8_t leg) { (void)leg; return 0.0f; }
-float ADC_GetLeg1Current(void) { return 0.0f; }
-float ADC_GetLeg2Current(void) { return 0.0f; }
-float ADC_GetLeg3Current(void) { return 0.0f; }
-float ADC_GetLeg4Current(void) { return 0.0f; }
-float ADC_GetBattery1Current(void) { return 0.0f; }
-float ADC_GetBattery2Current(void) { return 0.0f; }
-float ADC2_GetBattery1Voltage(void) { return battery1_voltage; }
-float ADC2_GetBattery2Voltage(void) { return battery2_voltage; }
 
 /* USER CODE END 0 */
 

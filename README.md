@@ -102,7 +102,7 @@ flowchart TD
     MOS_CHG --> VBUS
 
     subgraph 保护与负载
-        VBUS --> RELEASE[反电势吸收回路 PB11/PB12]
+        VBUS --> RELEASE[反电势吸收回路 PB0/PC7 (TIM8_CH2/CH2N)]
         VBUS --> MOTORS[四足关节驱动桥臂电机]
         VBUS --> DCDC12[12V 隔离 DCDC PA7] --> RK[上位机运控小脑 RK3588]
         VBUS --> DCDC24[24V 隔离 DCDC PC4] --> PERIPH[RGB状态面板 / 传感器]
@@ -124,7 +124,7 @@ flowchart TD
     RK <-->|FDCAN2*| MCU
 ```
 
-### 2.3 MCU 引脚分配与外设映射 (V1.2)
+### 2.3 MCU 引脚分配与外设映射 (V1.3)
 
 | 模块分类 | 引脚 | 网络标号 | 配置类型 | 电平/属性 | 功能说明 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -144,8 +144,8 @@ flowchart TD
 | | `PC4` | `O_Enable_24V` | GPIO_Output | 低电平有效 | 24V 隔离电源使能（开机默认高关断，放电/就绪下拉低导通） |
 | **状态声光** | `PC15` | `O_RGB_R` | GPIO_Output | 低端吸电流 | 外部 RGB 状态指示灯 - 红灯（供电由 24V DCDC 提供） |
 | | `PC2` | `O_RGB_G` | GPIO_Output | 低端吸电流 | 外部 RGB 状态指示灯 - 绿灯（供电由 24V DCDC 提供） |
-| | `PC14` | `O_RGB_B` | GPIO_Output | 低端吸电流 | 外部 RGB 状态指示灯 - 蓝灯（供电由 24V DCDC 提供） |
-| | `PC13` | `O_Alarm` | GPIO_Output | 推挽吸电流 | 外部蜂鸣器驱动（供电由 24V DCDC 提供） |
+| | `PC14` | `O_RGB_B` | GPIO_Output | 低端吸电流 | 外部状态指示灯 - 黄灯（原理图旧标号为 RGB_B，供电由 24V DCDC 提供） |
+| | `PC13` | `O_Alarm` | GPIO_Output | 推挽吸电流 | 外部蜂鸣器驱动（自激鸣叫，供电由 24V DCDC 提供） |
 | **模拟量采集** | `PA4` | `A_Peripheral_Current` | ADC2_IN17 | DMA 循环 | 外设放电电流检测（经运放采样） |
 | | `PB15` | `A_Vbus_Voltage` | ADC2_IN15 | DMA 循环 | 系统母线 VBUS 分压采样 |
 | **通信接口** | `PA11/PA12` | `CAN1_RX/TX` | FDCAN1 | 250kbps | 电池 1 BMS 专线通信 |
@@ -173,9 +173,10 @@ flowchart TD
 - **动态裁决逻辑**：
   - 若 $V_{BAT1} - V_{BAT2} > 0.10\text{V}$：仅开通 **BAT1 回充 MOS**，关断 BAT2 回充 MOS；
   - 若 $V_{BAT2} - V_{BAT1} > 0.10\text{V}$：仅开通 **BAT2 回充 MOS**，关断 BAT1 回充 MOS；
-  - 若 $|V_{BAT1} - V_{BAT2}| \le 0.10\text{V}$：双电池压差已平衡，双开回充 MOS（锁定全回充模式）；
-- **开通主放电前置保护**：在开通主放电 MOS 的前一步，先执行压差裁决配置回充 MOS，彻底杜绝低压电池在放电瞬间回充 MOS 的微秒级瞬态误导通；
-- **掉线防环流兜底**：若在双电池放电但尚未达成平衡期间，任一电池 CAN 通信中断，系统无法获取真实电芯压差，此时**强制关断双路回充 MOS**（返回 `0x00`），仅依靠单向主放电 MOS 供电，杜绝未知电压下的内部倒灌环流。
+  - 若 $|V_{BAT1} - V_{BAT2}| \le 0.10\text{V}$ 且持续保持 500ms（`POWER_BALANCE_DEBOUNCE_MS`）：双电池压差稳定平衡，双开回充 MOS（锁定全回充模式，彻底消除继电器式高频振颤）；
+- **热插拔与掉线差异化保护机制**：
+  - **双电池并联放电工况**：某路电池 CAN 通信超时（热拔出或掉线），系统上报离线（`0x01: BATTERY_ALARM_STATUS_OFFLINE`），立即切断该掉线电池本地主放电 MOS 与回充 MOS，状态机复位为 `POWER_BATTERY_STATE_OFF`，并清零平衡标志（`rechargeCurrentOnlyMode = 0`）。**同时坚决保持健康在线电池的回充 MOS 开启**，使整机供电无缝接管的同时，确保电机反电动势能够持续被健康在位电池平稳吸收，杜绝 VBUS 瞬间母线过压；后续新电池热插入时严格重新触发完整的 400ms 预放电限流与动态压差消抖裁决准入流程；
+  - **单电池放电工况**：若唯一供电电池 CAN 超时，系统上报离线（`0x01: BATTERY_ALARM_STATUS_OFFLINE`），坚决维持放电 MOS 导通供电，并上报小脑触发受控阻尼下蹲，杜绝粗暴断电摔狗。
 
 ### 3.3 电机反电动势（Back-EMF）吸收泄放保护
 
@@ -248,11 +249,12 @@ flowchart TD
 
 | 报文名称 | CAN ID (扩展帧) | 发送周期 / 机制 | 数据长度 | 数据字段定义说明 |
 | :--- | :--- | :--- | :--- | :--- |
-| **母线与外设电流** | `0x04100000` | 50ms | 8 字节 | Byte 0-1: 外设电流 (mA)<br>Byte 2-3: 桥臂总电流 (mA)<br>Byte 4-7: 预留 |
-| **电池 1/2 遥测数据** | `0x04200000`<br>`0x04200001` | 100ms | 8 字节 | Byte 0-1: 电池电压 (0.1V)<br>Byte 2-3: 电池电流 (0.1A)<br>Byte 4: SOC (%)<br>Byte 5: SOH (%)<br>Byte 6-7: 故障码 |
-| **电池与 MOS 状态** | `0x04400000` | 200ms / 跳变即时 | 8 字节 | Byte 0: BAT1 状态 (0~4)<br>Byte 1: BAT2 状态 (0~4)<br>Byte 2: BAT1 主放电 MOS<br>Byte 3: BAT1 回充 MOS<br>Byte 4: BAT2 主放电 MOS<br>Byte 5: BAT2 回充 MOS<br>Byte 6-7: BAT1/2 充电 MOS |
-| **小脑充电控制指令** | `0x04500000` | 事件下发 | 1 字节 | Byte 0: 0x01 请求进入充电 / 0x00 退出充电 |
-| **充电状态应答** | `0x04500001` | 事件应答 | 1 字节 | Byte 0: 0x01 处于充电 / 0x00 退出充电 |
+| **腿部电流上报** | `0x04100000` | *(已停用)* | 8 字节 | 硬件无采样电路，固件已彻底取消发送该帧 |
+| **动力母线遥测** | `0x04200000` | 200ms 周期 | 8 字节 | Byte 0-1: PA4 外设放电电流 (0.01A)<br>Byte 2-3: PB15 系统动力母线 VBUS 电压 (0.01V)<br>Byte 4: 反电势泄放状态 (0x00:未泄放, 0x01:泄放中)<br>Byte 5-7: 预留 0x00 |
+| **电池与 MOS 遥测** | `0x04400000` | 500ms / 跳变即时 | 8 字节 | **[V1.5重构]**<br>Byte 0-1: BAT1/2 状态 (0:就绪正常, 1:离线/未连接, 2:BMS故障禁放)<br>Byte 2-5: 主放电与回充 MOS 状态 (Byte 2/3: BAT1, Byte 4/5: BAT2)<br>Byte 6: 总充电控制 MOS (PB10)<br>Byte 7: 辅助电源掩码 (Bit0:外设MOS, Bit1:12V DCDC, Bit2:24V DCDC, Bit3~7:预留) |
+| **小脑充电控制** | `0x04500000`<br>`0x04500001` | 事件触发 | 1 字节 | 下发: 0x01 请求进入充电 / 0x00 退出充电<br>应答: 0x01 处于充电 / 0x00 处于放电 |
+| **小脑声光控制** | `0x04600000`<br>`0x04600001` | 500ms / 跳变即时 | 1~3 字节 / 2 字节 | 下发: Byte 0 灯效码, Byte 1 蜂鸣器(自激鸣叫), Byte 2 超时<br>回传: Byte 0 当前灯效, Byte 1 蜂鸣器状态 |
+| **IAP 在线升级** | `0x04700000`<br>`0x04700001` | 握手交互 | 8 字节 | 小脑 Python 升级脚本交互（握手、擦除、分包编程、CRC 校验） |
 
 ---
 
@@ -393,8 +395,8 @@ D-Y-A10/
 ## 八、相关文档索引
 
 - [CAN IAP 在线升级指南](file:///home/yq/ghf/workspace/D-Y-A10/CAN_IAP_GUIDE.md)
-- [电源板 V1.2 MCU 引脚分配与功能说明](file:///home/yq/ghf/workspace/D-Y-A10/电源板V1.2_MCU引脚分配与功能说明.md)
+- [电源板 V1.3 MCU 引脚分配与功能说明](file:///home/yq/ghf/workspace/D-Y-A10/电源板V1.3_MCU引脚分配与功能说明.md)
+- [电源板 V1.3 硬件变动与软件适配方案](file:///home/yq/ghf/workspace/D-Y-A10/电源板V1.3_硬件变动与软件适配方案.md)
 - [充电控制逻辑与协议交互](file:///home/yq/ghf/workspace/D-Y-A10/充电控制逻辑与协议交互.md)
 - [三色灯控制逻辑与CAN通信协议 (ICD)](file:///home/yq/ghf/workspace/D-Y-A10/三色灯控制逻辑与CAN通信协议.md)
-- [CAN3 逻辑总结](file:///home/yq/ghf/workspace/D-Y-A10/CAN3_逻辑总结.md)
-- [CAN Bus-Off 优化总结](file:///home/yq/ghf/workspace/D-Y-A10/CAN%20Bus-Off%20优化总结.md)
+- [FDCAN2 / 小脑通信与总线逻辑总结](file:///home/yq/ghf/workspace/D-Y-A10/CAN2_逻辑总结.md)

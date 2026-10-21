@@ -38,16 +38,14 @@
 #define FDCAN_BATTERY_FAULT_ID_BASE  0x040E8000U
 #define FDCAN_BATTERY_TEMP_ID_BASE   0x04078000U
 #define FDCAN_BATTERY_ID_MASK        0x1FFFFF00U
-#define FDCAN_LEG_CURRENT_REPORT_ID  0x04100000U
-#define FDCAN_PERIPHERAL_CURRENT_REPORT_ID 0x04200000U
-/* [急停功能已停用]
-#define FDCAN_ESTOP_REPORT_ID        0x04300000U
-#define FDCAN_ESTOP_REPORT_PERIOD_MS 50U
-*/
+#define FDCAN_BUS_TELEMETRY_REPORT_ID 0x04200000U
+#define FDCAN_PERIPHERAL_CURRENT_REPORT_ID FDCAN_BUS_TELEMETRY_REPORT_ID
 #define FDCAN_BATTERY_ALARM_REPORT_ID 0x04400000U
-#define FDCAN_CURRENT_REPORT_PERIOD_MS 200U
-#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 100U
+#define FDCAN_BUS_TELEMETRY_REPORT_PERIOD_MS 200U
+#define FDCAN_PERIPHERAL_CURRENT_REPORT_PERIOD_MS FDCAN_BUS_TELEMETRY_REPORT_PERIOD_MS
+#define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 500U
 #define FDCAN_CURRENT_REPORT_SCALE    100.0f
+#define FDCAN_VOLTAGE_REPORT_SCALE    100.0f
 #define FDCAN_BATTERY_WAKE_PERIOD_MS  2000U
 #define FDCAN_BMS_MOS_DEBOUNCE_FRAMES 3U
 
@@ -59,8 +57,7 @@ static uint8_t bat2AllowedDebounceCount = 0U;
 static uint8_t bat2ProhibitDebounceCount = 0U;
 static uint8_t bat2UnknownDebounceCount = 0U;
 static uint32_t batteryCanLastTxTick = 0U;
-static uint32_t currentReportLastTxTick = 0U;
-/* static uint32_t estopReportLastTxTick = 0U; // [急停功能已停用] */
+static uint32_t busTelemetryReportLastTxTick = 0U;
 static uint32_t batteryAlarmReportLastTxTick = 0U;
 
 typedef struct
@@ -389,7 +386,28 @@ static void FDCAN_PackInt16LittleEndian(uint8_t data[], uint8_t offset, int16_t 
   data[offset + 1U] = (uint8_t)((raw >> 8) & 0xFFU);
 }
 
-static HAL_StatusTypeDef FDCAN_SendCurrentReport(uint32_t identifier, const uint8_t txData[])
+static void FDCAN_PackUint16LittleEndian(uint8_t data[], uint8_t offset, uint16_t value)
+{
+  data[offset] = (uint8_t)(value & 0xFFU);
+  data[offset + 1U] = (uint8_t)((value >> 8) & 0xFFU);
+}
+
+static uint16_t FDCAN_VoltageToCanRaw(float voltageV)
+{
+  if (!(voltageV > 0.0f))
+  {
+    return 0U;
+  }
+  float scaled = (voltageV * FDCAN_VOLTAGE_REPORT_SCALE) + 0.5f;
+  if (scaled > 65535.0f)
+  {
+    return 65535U;
+  }
+  return (uint16_t)scaled;
+}
+
+static HAL_StatusTypeDef FDCAN_SendExtendedDataReport8B(uint32_t identifier, const uint8_t txData[])
+#define FDCAN_SendCurrentReport FDCAN_SendExtendedDataReport8B /* 兼容旧内部名 */
 {
   FDCAN_TxHeaderTypeDef txHeader;
   HAL_StatusTypeDef status;
@@ -431,32 +449,29 @@ static HAL_StatusTypeDef FDCAN_SendCurrentReport(uint32_t identifier, const uint
   return status;
 }
 
-static void FDCAN_SendCurrentReportsToRk(void)
+HAL_StatusTypeDef FDCAN_SendBusTelemetryReportToRk(void)
 {
-  uint8_t legCurrentData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
-  uint8_t peripheralCurrentData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+  uint8_t busTelemetryData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
 
-  FDCAN_PackInt16LittleEndian(legCurrentData, 0U, FDCAN_CurrentToCanRaw(ADC_GetLeg1Current()));
-  FDCAN_PackInt16LittleEndian(legCurrentData, 2U, FDCAN_CurrentToCanRaw(ADC_GetLeg2Current()));
-  FDCAN_PackInt16LittleEndian(legCurrentData, 4U, FDCAN_CurrentToCanRaw(ADC_GetLeg3Current()));
-  FDCAN_PackInt16LittleEndian(legCurrentData, 6U, FDCAN_CurrentToCanRaw(ADC_GetLeg4Current()));
-
-  FDCAN_PackInt16LittleEndian(peripheralCurrentData,
+  /* Byte 0-1: 外设放电电流 (int16_t LE, 0.01A) */
+  FDCAN_PackInt16LittleEndian(busTelemetryData,
                               0U,
                               FDCAN_CurrentToCanRaw(ADC_GetPeripheralDischargeCurrent()));
 
-  (void)FDCAN_SendCurrentReport(FDCAN_LEG_CURRENT_REPORT_ID, legCurrentData);
-  (void)FDCAN_SendCurrentReport(FDCAN_PERIPHERAL_CURRENT_REPORT_ID, peripheralCurrentData);
+  /* Byte 2-3: 系统动力主母线 VBUS 电压 (uint16_t LE, 0.01V) */
+  FDCAN_PackUint16LittleEndian(busTelemetryData,
+                               2U,
+                               FDCAN_VoltageToCanRaw(ADC_GetVbusVoltage()));
+
+  /* Byte 4: 反电势高压泄放状态 (0x00=未泄放, 0x01=斩波泄放中) */
+  busTelemetryData[4] = (back_emf_absorb_state != 0U) ? 0x01U : 0x00U;
+
+  /* Byte 5-7: 预留固定为 0x00 */
+
+  return FDCAN_SendCurrentReport(FDCAN_BUS_TELEMETRY_REPORT_ID, busTelemetryData);
 }
 
-/* [急停功能已停用，硬件未连接]
-static void FDCAN_SendEmergencyStopReportToRk(void)
-{
-  uint8_t estopData[8] = {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
 
-  (void)FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
-}
-*/
 
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
 {
@@ -468,8 +483,8 @@ HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
   alarmData[3] = bat1_recharge_mos_state;
   alarmData[4] = bat2_discharge_mos_state;
   alarmData[5] = bat2_recharge_mos_state;
-  alarmData[6] = bat1_charge_mos_state;
-  alarmData[7] = bat2_charge_mos_state;
+  alarmData[6] = bat_charge_mos_state;
+  alarmData[7] = (uint8_t)(Power_GetAuxPowerStatusMask() & 0x07U);
 
   return FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
 }
@@ -1396,8 +1411,7 @@ void FDCAN_BatteryCanStart(void)
   bat2ProhibitDebounceCount = 0U;
   bat2UnknownDebounceCount = 0U;
   batteryCanLastTxTick = HAL_GetTick() - FDCAN_BATTERY_WAKE_PERIOD_MS;
-  currentReportLastTxTick = HAL_GetTick();
-  /* estopReportLastTxTick = HAL_GetTick() - FDCAN_ESTOP_REPORT_PERIOD_MS; // [急停功能已停用] */
+  busTelemetryReportLastTxTick = HAL_GetTick();
   batteryAlarmReportLastTxTick = HAL_GetTick() - FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS;
 }//负责初始化接收过滤器并启动 CAN。
 
@@ -1407,11 +1421,10 @@ void FDCAN_BatteryCanTask(void)
   static uint8_t prevBat2Alarm = BATTERY_ALARM_STATUS_NORMAL;
   static uint8_t prevBat1DischargeMos = 0U;
   static uint8_t prevBat1RechargeMos = 0U;
-  static uint8_t prevBat1ChargeMos = 0U;
   static uint8_t prevBat2DischargeMos = 0U;
   static uint8_t prevBat2RechargeMos = 0U;
-  static uint8_t prevBat2ChargeMos = 0U;
-  static uint8_t alarmClearBurstRemaining = 0U;
+  static uint8_t prevChargeMos = 0U;
+  static uint8_t prevAuxStatus = 0U;
   static uint8_t mosChangedPending = 0U;
 
   uint32_t now;
@@ -1444,57 +1457,40 @@ void FDCAN_BatteryCanTask(void)
   /* RK 上报统一门禁：FDCAN2 Bus-Off 期间跳过所有向 RK 的上报，避免无效计算 */
   if (fdcan2_busoff_flag == 0U)
   {
-    /* [急停功能已停用，硬件未连接]
-    if ((Power_IsEmergencyStopActive() != 0U) &&
-        ((now - estopReportLastTxTick) >= FDCAN_ESTOP_REPORT_PERIOD_MS))
-    {
-      estopReportLastTxTick = now;
-      FDCAN_SendEmergencyStopReportToRk();
-    }
-    */
 
     uint8_t curBat1Alarm = Power_GetBattery1AlarmStatus();
     uint8_t curBat2Alarm = Power_GetBattery2AlarmStatus();
-    uint8_t hasAlarm = ((curBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
-                        (curBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
+    uint8_t curAuxStatus = Power_GetAuxPowerStatusMask();
 
-    /* 监测本地 MOS 状态是否发生跳变（放电、回充、充电 MOS） */
-    uint8_t mosChanged = ((bat1_discharge_mos_state != prevBat1DischargeMos) ||
-                          (bat1_recharge_mos_state != prevBat1RechargeMos) ||
-                          (bat1_charge_mos_state != prevBat1ChargeMos) ||
-                          (bat2_discharge_mos_state != prevBat2DischargeMos) ||
-                          (bat2_recharge_mos_state != prevBat2RechargeMos) ||
-                          (bat2_charge_mos_state != prevBat2ChargeMos)) ? 1U : 0U;
+    /* 监测 0x04400000 本地状态是否发生跳变（电池状态、MOS动作或辅助电源状态） */
+    uint8_t stateChanged = ((bat1_discharge_mos_state != prevBat1DischargeMos) ||
+                            (bat1_recharge_mos_state != prevBat1RechargeMos) ||
+                            (bat2_discharge_mos_state != prevBat2DischargeMos) ||
+                            (bat2_recharge_mos_state != prevBat2RechargeMos) ||
+                            (bat_charge_mos_state != prevChargeMos) ||
+                            (curAuxStatus != prevAuxStatus) ||
+                            (curBat1Alarm != prevBat1Alarm) ||
+                            (curBat2Alarm != prevBat2Alarm)) ? 1U : 0U;
 
-    if (mosChanged != 0U)
+    if (stateChanged != 0U)
     {
       mosChangedPending = 1U;
-    }
-
-    /* 检测是否从有报警恢复到全正常 */
-    if ((hasAlarm == 0U) &&
-        ((prevBat1Alarm != BATTERY_ALARM_STATUS_NORMAL) ||
-         (prevBat2Alarm != BATTERY_ALARM_STATUS_NORMAL)))
-    {
-      alarmClearBurstRemaining = FDCAN_BATTERY_ALARM_CLEAR_BURST_COUNT;
     }
 
     prevBat1Alarm = curBat1Alarm;
     prevBat2Alarm = curBat2Alarm;
     prevBat1DischargeMos = bat1_discharge_mos_state;
     prevBat1RechargeMos = bat1_recharge_mos_state;
-    prevBat1ChargeMos = bat1_charge_mos_state;
     prevBat2DischargeMos = bat2_discharge_mos_state;
     prevBat2RechargeMos = bat2_recharge_mos_state;
-    prevBat2ChargeMos = bat2_charge_mos_state;
+    prevChargeMos = bat_charge_mos_state;
+    prevAuxStatus = curAuxStatus;
 
     /* 
-     * 状态上报优先级决策：
-     * 1. 最高优先级：mosChangedPending 激活（本地 MOS 状态发生开/关动作），
-     *    立即触发发送，不受报警限速或心跳周期延缓；若遇 Tx FIFO 满返回 HAL_BUSY 则保持挂起重试，杜绝事件丢失；
-     * 2. 次高优先级：hasAlarm != 0（存在电池异常报警），按 200ms 周期高频刷新上报；
-     * 3. 第三优先级：alarmClearBurstRemaining > 0（刚从异常恢复正常），按 200ms 周期突发连续确认；
-     * 4. 最低优先级：正常状态下按 1000ms 心跳周期低频保活上报。
+     * 状态上报双层架构（V1.5 极简）：
+     * 1. 最高优先级：mosChangedPending 激活（状态发生任何动作跳变），
+     *    立即触发发送，0 延时同步状态；若遇 Tx FIFO 满返回 HAL_BUSY 则保持挂起重试，杜绝事件丢失；
+     * 2. 基线固定心跳：稳态下（单电或双电运行）统一以 500ms 固定周期发送心跳保活。
      */
     if (mosChangedPending != 0U)
     {
@@ -1504,42 +1500,18 @@ void FDCAN_BatteryCanTask(void)
         mosChangedPending = 0U;
       }
     }
-    else if (hasAlarm != 0U)
+    else if ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS)
     {
-      if ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS)
+      if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
       {
-        if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
-        {
-          batteryAlarmReportLastTxTick = now;
-        }
-      }
-    }
-    else if (alarmClearBurstRemaining > 0U)
-    {
-      if ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS)
-      {
-        if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
-        {
-          batteryAlarmReportLastTxTick = now;
-          alarmClearBurstRemaining--;
-        }
-      }
-    }
-    else
-    {
-      if ((now - batteryAlarmReportLastTxTick) >= FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS)
-      {
-        if (FDCAN_SendBatteryAlarmReportToRk() == HAL_OK)
-        {
-          batteryAlarmReportLastTxTick = now;
-        }
+        batteryAlarmReportLastTxTick = now;
       }
     }
 
-    if ((now - currentReportLastTxTick) >= FDCAN_CURRENT_REPORT_PERIOD_MS)
+    if ((now - busTelemetryReportLastTxTick) >= FDCAN_BUS_TELEMETRY_REPORT_PERIOD_MS)
     {
-      currentReportLastTxTick = now;
-      FDCAN_SendCurrentReportsToRk();
+      busTelemetryReportLastTxTick = now;
+      (void)FDCAN_SendBusTelemetryReportToRk();
     }
 
     /* 超时跳变检测：若此前受控且本次检测已超时离线，立即上报一次全灭/关断状态 */

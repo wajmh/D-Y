@@ -53,7 +53,9 @@ static uint8_t backEmfAbsorbReleased = 0U;
 static uint32_t battery1PreDischargeStartTick = 0U;
 static uint32_t battery2PreDischargeStartTick = 0U;
 static uint8_t rechargeCurrentOnlyMode = 0U;
+static uint32_t rechargeBalanceSteadyStartTick = 0U;
 static uint8_t chargeCurrentOnlyMode = 0U;
+static uint32_t chargeBalanceSteadyStartTick = 0U;
 static uint8_t chargeReplyBatteryIndex = 0U;
 static uint32_t chargeReplyLastTxTick = 0U;
 static uint8_t battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
@@ -82,11 +84,8 @@ static uint8_t Power_IsBatteryBmsDischargeAllowed(uint8_t batteryIndex);
 static uint8_t Power_IsBatteryBmsDischargeProhibited(uint8_t batteryIndex);
 static uint8_t Power_IsBatteryBmsDischargeUnknown(uint8_t batteryIndex);
 static uint8_t Power_IsBatteryBmsMosFresh(uint8_t batteryIndex);
-static uint8_t Power_IsBatteryCanReady(uint8_t batteryIndex);
 static uint8_t Power_IsBatteryCanPresent(uint8_t batteryIndex);
 static float Power_GetBatteryCanVoltage(uint8_t batteryIndex);
-__attribute__((unused))
-static float Power_GetBatteryEffectiveVoltage(uint8_t batteryIndex);
 static float Power_GetBalancedVoltageDiff(void);
 static void Power_MaintainChargeModeVbusPower(uint8_t battery1Present, uint8_t battery2Present);
 static uint8_t Power_GetRechargeMaskByCanVoltage(uint8_t battery1Ready, uint8_t battery2Ready);
@@ -229,6 +228,10 @@ void Power_AllMosOff(void)
   powerPreDischargeBatteryIndex = 0U;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  rechargeCurrentOnlyMode = 0U;
+  rechargeBalanceSteadyStartTick = 0U;
+  chargeCurrentOnlyMode = 0U;
+  chargeBalanceSteadyStartTick = 0U;
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
   Power_SetDcdc12V(0U);
   Power_SetDcdc24V(0U);
@@ -286,7 +289,6 @@ void Power_DischargeModeTask(void)
   uint8_t bat1BmsAllowed;
   uint8_t bat1BmsProhibited;
   uint8_t bat1BmsUnknown;
-  uint8_t bat1CanReady;
   uint8_t bat1PhysOnline;
   uint8_t bat1Enable;
 
@@ -294,7 +296,6 @@ void Power_DischargeModeTask(void)
   uint8_t bat2BmsAllowed;
   uint8_t bat2BmsProhibited;
   uint8_t bat2BmsUnknown;
-  uint8_t bat2CanReady;
   uint8_t bat2PhysOnline;
   uint8_t bat2Enable;
 
@@ -307,76 +308,49 @@ void Power_DischargeModeTask(void)
   bat1BmsAllowed = Power_IsBatteryBmsDischargeAllowed(1U);
   bat1BmsProhibited = Power_IsBatteryBmsDischargeProhibited(1U);
   bat1BmsUnknown = Power_IsBatteryBmsDischargeUnknown(1U);
-  bat1CanReady = Power_IsBatteryCanReady(1U);
   bat1PhysOnline = Power_IsBatteryPhysicallyPresent(1U);
 
   bat2CanAlive = Power_IsBatteryCanAlive(2U);
   bat2BmsAllowed = Power_IsBatteryBmsDischargeAllowed(2U);
   bat2BmsProhibited = Power_IsBatteryBmsDischargeProhibited(2U);
   bat2BmsUnknown = Power_IsBatteryBmsDischargeUnknown(2U);
-  bat2CanReady = Power_IsBatteryCanReady(2U);
   bat2PhysOnline = Power_IsBatteryPhysicallyPresent(2U);
 
   /*
-   * 电池 1 报警状态判定：
-   * 1. 最近的 MOS 帧明确禁放或状态无效：优先关闭本地路径；
-   * 2. 物理电压低：判定为物理拔出；
-   * 3. 物理在线但任一必要 CAN 状态流超时：判定为通信掉线；
-   * 4. 物理在线、CAN 正常且 BMS 明确允许放电：判定为正常。
+   * 电池 1 状态判定 (V1.5 极简 3 态)：
+   * 1. CAN 通信掉线（超时无报文）：判定为离线/未连接 (BATTERY_ALARM_STATUS_OFFLINE, 0x01)；
+   * 2. CAN 正常但 BMS 明确禁放或状态异常/未知：判定为 BMS 故障禁放 (BATTERY_ALARM_STATUS_PROHIBITED, 0x02)；
+   * 3. CAN 正常且 BMS 明确允许放电：判定为正常就绪 (BATTERY_ALARM_STATUS_NORMAL, 0x00)。
    */
-  if (bat1BmsProhibited != 0U)
+  if (bat1CanAlive == 0U)
   {
-    battery1AlarmStatus = BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE;
+    battery1AlarmStatus = BATTERY_ALARM_STATUS_OFFLINE;
   }
-  else if (bat1BmsUnknown != 0U)
+  else if ((bat1BmsProhibited != 0U) || (bat1BmsUnknown != 0U) || (bat1BmsAllowed == 0U))
   {
-    battery1AlarmStatus = BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN;
+    battery1AlarmStatus = BATTERY_ALARM_STATUS_PROHIBITED;
   }
-  else if (bat1PhysOnline == 0U)
-  {
-    battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
-  }
-  else if (bat1CanAlive == 0U)
-  {
-    battery1AlarmStatus = BATTERY_ALARM_STATUS_CAN_COMM_LOST;
-  }
-  else if (bat1BmsAllowed != 0U)
+  else
   {
     battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   }
-  else
-  {
-    battery1AlarmStatus = BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN;
-  }
 
-  /* 电池 2 报警状态判定（同上） */
-  if (bat2BmsProhibited != 0U)
+  /* 电池 2 状态判定 (同上) */
+  if (bat2CanAlive == 0U)
   {
-    battery2AlarmStatus = BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE;
+    battery2AlarmStatus = BATTERY_ALARM_STATUS_OFFLINE;
   }
-  else if (bat2BmsUnknown != 0U)
+  else if ((bat2BmsProhibited != 0U) || (bat2BmsUnknown != 0U) || (bat2BmsAllowed == 0U))
   {
-    battery2AlarmStatus = BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN;
+    battery2AlarmStatus = BATTERY_ALARM_STATUS_PROHIBITED;
   }
-  else if (bat2PhysOnline == 0U)
-  {
-    battery2AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
-  }
-  else if (bat2CanAlive == 0U)
-  {
-    battery2AlarmStatus = BATTERY_ALARM_STATUS_CAN_COMM_LOST;
-  }
-  else if (bat2BmsAllowed != 0U)
+  else
   {
     battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   }
-  else
-  {
-    battery2AlarmStatus = BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN;
-  }
 
   /*
-   * 安全底线检查：若两块电池物理电压均低于阈值，主动力来源彻底丧失，
+   * 安全底线检查：若两块电池均判定为物理离线（无有效 CAN 心跳且非主放电态），主动力来源彻底丧失，
    * 立即执行全板安全关断（所有放电/回充/预充关断，反电动势吸收开启，状态机复位为 OFF）。
    */
   if ((bat1PhysOnline == 0U) && (bat2PhysOnline == 0U))
@@ -388,25 +362,21 @@ void Power_DischargeModeTask(void)
 
   /*
    * 决策电池 1 本地放电路径使能：
-   * 1. 若 BMS 明确禁放或物理拔出：立即禁止放电 (bat1Enable = 0)；
-   * 2. 若 BMS 状态未知/无效：若物理在线且已处于放电态，保持动力不断电 (bat1Enable = 1) 并上报报警，
-   *    避免因偶发单帧干扰导致断电摔狗；若处于未就绪态则严把准入 (bat1Enable = 0)；
-   * 3. 若 CAN 正常且 BMS 明确允许放电 (bat1CanReady != 0)：在物理在位时使能放电 (bat1Enable = bat1PhysOnline)；
-   * 4. 若 CAN 通信掉线但物理在线且已处于放电态：保持放电不断动力 (bat1Enable = 1)；
-   * 5. 其余情况均不使能。
+   * 1. 若 BMS 明确禁放 (bat1BmsProhibited)：坚决立即禁止放电 (bat1Enable = 0)；
+   * 2. 若 BMS 状态未知/无效 (bat1BmsUnknown)：若物理在位且已处于放电态，执行锁死保护保持放电不断动力 (bat1Enable = 1)，
+   *    避免因偶发单帧干扰导致空中断电摔狗；若处于未就绪/待机态则严把准入 (bat1Enable = 0)；
+   * 3. 若 正常就绪 (NORMAL)：在物理在位时使能放电 (bat1Enable = bat1PhysOnline)；
+   * 4. 若 离线/掉线 (OFFLINE)：
+   *    - 若处于单电放电且物理在位（Power_IsBatteryPhysicallyPresent返回1）：保持放电不断动力 (bat1Enable = 1) 并上报离线，供小脑受控下蹲；
+   *    - 其余情况（双电掉线、待机掉线）：关断放电 (bat1Enable = 0)。
    */
-  if (battery1AlarmStatus == BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE)
+  if (bat1BmsProhibited != 0U)
   {
     bat1Enable = 0U;
   }
-  else if (battery1AlarmStatus == BATTERY_ALARM_STATUS_REMOVED)
+  else if (bat1BmsUnknown != 0U)
   {
-    bat1Enable = 0U;
-  }
-  else if (battery1AlarmStatus == BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN)
-  {
-    if ((bat1PhysOnline != 0U) &&
-        (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE))
+    if ((bat1PhysOnline != 0U) && (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE))
     {
       bat1Enable = 1U;
     }
@@ -415,34 +385,30 @@ void Power_DischargeModeTask(void)
       bat1Enable = 0U;
     }
   }
-  else if (bat1CanReady != 0U)
+  else if (battery1AlarmStatus == BATTERY_ALARM_STATUS_NORMAL)
   {
     bat1Enable = bat1PhysOnline;
   }
-  else if ((bat1CanAlive == 0U) &&
-           (bat1PhysOnline != 0U) &&
-           (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE))
+  else /* BATTERY_ALARM_STATUS_OFFLINE */
   {
-    bat1Enable = 1U;
-  }
-  else
-  {
-    bat1Enable = 0U;
+    if ((bat1PhysOnline != 0U) && (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE))
+    {
+      bat1Enable = 1U;
+    }
+    else
+    {
+      bat1Enable = 0U;
+    }
   }
 
   /* 决策电池 2 本地放电路径使能（同上） */
-  if (battery2AlarmStatus == BATTERY_ALARM_STATUS_BMS_PROHIBIT_DISCHARGE)
+  if (bat2BmsProhibited != 0U)
   {
     bat2Enable = 0U;
   }
-  else if (battery2AlarmStatus == BATTERY_ALARM_STATUS_REMOVED)
+  else if (bat2BmsUnknown != 0U)
   {
-    bat2Enable = 0U;
-  }
-  else if (battery2AlarmStatus == BATTERY_ALARM_STATUS_BMS_STATE_UNKNOWN)
-  {
-    if ((bat2PhysOnline != 0U) &&
-        (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE))
+    if ((bat2PhysOnline != 0U) && (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE))
     {
       bat2Enable = 1U;
     }
@@ -451,19 +417,20 @@ void Power_DischargeModeTask(void)
       bat2Enable = 0U;
     }
   }
-  else if (bat2CanReady != 0U)
+  else if (battery2AlarmStatus == BATTERY_ALARM_STATUS_NORMAL)
   {
     bat2Enable = bat2PhysOnline;
   }
-  else if ((bat2CanAlive == 0U) &&
-           (bat2PhysOnline != 0U) &&
-           (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE))
+  else /* BATTERY_ALARM_STATUS_OFFLINE */
   {
-    bat2Enable = 1U;
-  }
-  else
-  {
-    bat2Enable = 0U;
+    if ((bat2PhysOnline != 0U) && (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE))
+    {
+      bat2Enable = 1U;
+    }
+    else
+    {
+      bat2Enable = 0U;
+    }
   }
 
   Power_UpdateBattery1Path(bat1Enable);
@@ -493,13 +460,12 @@ void Power_UpdateVbusPowerRelease(void)
   uint8_t prevAbsorbState = back_emf_absorb_state;
 
   /*
-   * 反电势吸收保护控制规则 (PB11 TIM2_CH4 PWM 50% 斩波泄放)：
+   * 反电势吸收保护控制规则 (PC7/PB0 TIM8_CH2/CH2N 互补 PWM 50% 斩波泄放)：
    * 1. 仅当系统处于放电工作模式（任一电池处于主放电态 POWER_BATTERY_STATE_DISCHARGE）时才允许泄放；
    * 2. 当 VBUS 电压超过 85.0V (POWER_VBUS_RELEASE_OPEN_VOLTAGE) 时，
-   *    通过 PB11 (TIM2 通道 4) 输出 50% 占空比 PWM 进行控流泄放；
+   *    通过 TIM8 通道 2 开启互补 PWM (PC7/PB0) 进行 50% 占空比控流泄放；
    * 3. 当 VBUS 电压回落至 84.0V (POWER_VBUS_RELEASE_CLOSE_VOLTAGE，1V 滞回防抖)
-   *    或退出放电模式时，将占空比置 0 关断泄放；
-   * 4. PB12 泄放回路未使用，保持关断。
+   *    或退出放电模式时，关断 TIM8 PWM 泄放输出。
    */
 #if POWER_TEST_BENCH_SUPPLY_MODE
   /* 稳压电源测试模式：直接使能泄放判定，不受电池放电状态机限制（兼容 BAT1 输入或 VBUS 直接注电） */
@@ -579,7 +545,30 @@ static void Power_MaintainChargeModeVbusPower(uint8_t battery1Present, uint8_t b
    */
   if (bat1CanSupply && bat2CanSupply)
   {
-    if (Power_GetBalancedVoltageDiff() >= 0.0f)
+    float v1 = Power_GetBatteryCanVoltage(1U);
+    float v2 = Power_GetBatteryCanVoltage(2U);
+    uint8_t selectBat1;
+
+    /*
+     * 迟滞回差防抖 (Hysteresis 0.3V)：
+     * 1. 若当前 BAT1 处于放电维持供电中，仅当 BAT2 电压显著高出 BAT1 超过 0.3V 时才切换至 BAT2；
+     * 2. 若当前 BAT2 处于放电维持供电中，仅当 BAT1 电压显著高出 BAT2 超过 0.3V 时才切换至 BAT1；
+     * 3. 若初始进入均未放电，以电压更高者为准 (v1 >= v2 选择 BAT1)。
+     */
+    if (battery1Control.state == POWER_BATTERY_STATE_DISCHARGE)
+    {
+      selectBat1 = ((v2 - v1) > POWER_CHARGE_VBUS_HYSTERESIS_VOLTAGE) ? 0U : 1U;
+    }
+    else if (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE)
+    {
+      selectBat1 = ((v1 - v2) > POWER_CHARGE_VBUS_HYSTERESIS_VOLTAGE) ? 1U : 0U;
+    }
+    else
+    {
+      selectBat1 = (v1 >= v2) ? 1U : 0U;
+    }
+
+    if (selectBat1 != 0U)
     {
       HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
       battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
@@ -637,7 +626,9 @@ HAL_StatusTypeDef Power_EnterChargeMode(void)
   dischargeModeEnabled = 1U;
   powerWorkMode = POWER_WORK_MODE_CHARGE;
   rechargeCurrentOnlyMode = 0U;
+  rechargeBalanceSteadyStartTick = 0U;
   chargeCurrentOnlyMode = 0U;
+  chargeBalanceSteadyStartTick = 0U;
   chargeReplyBatteryIndex = 0U;
   chargeReplyLastTxTick = HAL_GetTick() - POWER_CHARGE_REPLY_PERIOD_MS;
 
@@ -653,7 +644,9 @@ void Power_ExitChargeMode(void)
 
     powerWorkMode = POWER_WORK_MODE_DISCHARGE;
     rechargeCurrentOnlyMode = 0U;
+    rechargeBalanceSteadyStartTick = 0U;
     chargeCurrentOnlyMode = 0U;
+    chargeBalanceSteadyStartTick = 0U;
     chargeReplyBatteryIndex = 0U;
     chargeReplyLastTxTick = HAL_GetTick();
 
@@ -713,17 +706,34 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
     {
       if (voltageDiff > POWER_CHARGE_BALANCE_DIFF)
       {
+        chargeBalanceSteadyStartTick = 0U;
         chargeMask = 0x02U;
         replyBatteryIndex = 2U;
       }
       else if (voltageDiff < -POWER_CHARGE_BALANCE_DIFF)
       {
+        chargeBalanceSteadyStartTick = 0U;
         chargeMask = 0x01U;
         replyBatteryIndex = 1U;
       }
       else
       {
-        chargeCurrentOnlyMode = 1U;
+        /* 压差缩小至 0.10V 平衡区间，需持续稳定 500ms 消抖确认才锁存双充并网 */
+        if (chargeBalanceSteadyStartTick == 0U)
+        {
+          chargeBalanceSteadyStartTick = now;
+        }
+
+        if ((now - chargeBalanceSteadyStartTick) >= POWER_BALANCE_DEBOUNCE_MS)
+        {
+          chargeCurrentOnlyMode = 1U;
+        }
+        else
+        {
+          /* 消抖等待期间维持充电压略低的一侧 */
+          chargeMask = (voltageDiff >= 0.0f) ? 0x02U : 0x01U;
+          replyBatteryIndex = (voltageDiff >= 0.0f) ? 2U : 1U;
+        }
       }
     }
 
@@ -736,18 +746,21 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
   else if (battery1Present != 0U)
   {
     chargeCurrentOnlyMode = 0U;
+    chargeBalanceSteadyStartTick = 0U;
     chargeMask = 0x01U;
     replyBatteryIndex = 1U;
   }
   else if (battery2Present != 0U)
   {
     chargeCurrentOnlyMode = 0U;
+    chargeBalanceSteadyStartTick = 0U;
     chargeMask = 0x02U;
     replyBatteryIndex = 2U;
   }
   else
   {
     chargeCurrentOnlyMode = 0U;
+    chargeBalanceSteadyStartTick = 0U;
   }
 
   Power_SetChargeMos(chargeMask);
@@ -766,57 +779,13 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
   if (chargeMask == 0U)
   {
     chargeCurrentOnlyMode = 0U;
+    chargeBalanceSteadyStartTick = 0U;
     chargeReplyBatteryIndex = 0U;
     chargeReplyLastTxTick = now;
   }
 }
 
-void Power_TestBattery1DischargeSequence(void)
-{
-  
-  Power_AllMosOff();
 
-  HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
-  __HAL_TIM_MOE_DISABLE(&htim8);
-  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
-  HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_Delay(POWER_PRE_DISCHARGE_DELAY_MS);
-  HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_Delay(POWER_PRE_DISCHARGE_OVERLAP_MS);
-  HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  Power_SetDcdc12V(1U);
-  Power_SetDcdc24V(1U);
-}//测试函数
-
-/* [急停功能已停用，硬件未连接，PD2已在CubeMX关闭]
-GPIO_PinState Power_ReadEmergencyStop(void)
-{
-  return HAL_GPIO_ReadPin(EMERGENCY_STOP_GPIO_Port, EMERGENCY_STOP_Pin);
-}
-
-uint8_t Power_IsEmergencyStopActive(void)
-{
-  static GPIO_PinState lastRawState = GPIO_PIN_SET;
-  static GPIO_PinState debouncedState = GPIO_PIN_SET;
-  static uint32_t lastChangeTick = 0U;
-  GPIO_PinState rawState = Power_ReadEmergencyStop();
-  uint32_t now = HAL_GetTick();
-
-  if (rawState != lastRawState)
-  {
-    lastRawState = rawState;
-    lastChangeTick = now;
-  }
-
-  if ((now - lastChangeTick) >= POWER_ESTOP_DEBOUNCE_MS)
-  {
-    debouncedState = lastRawState;
-  }
-
-  return (debouncedState == POWER_ESTOP_ACTIVE_STATE) ? 1U : 0U;
-}
-*/
 
 uint8_t Power_GetBattery1AlarmStatus(void)
 {
@@ -828,9 +797,31 @@ uint8_t Power_GetBattery2AlarmStatus(void)
   return battery2AlarmStatus;
 }
 
+uint8_t Power_GetAuxPowerStatusMask(void)
+{
+  uint8_t mask = 0U;
+
+  if (peripheral_power_state != 0U)
+  {
+    mask |= POWER_AUX_STATUS_PERIPHERAL_MOS_BIT;
+  }
+  if (dcdc_12v_state != 0U)
+  {
+    mask |= POWER_AUX_STATUS_DCDC_12V_BIT;
+  }
+  if (dcdc_24v_state != 0U)
+  {
+    mask |= POWER_AUX_STATUS_DCDC_24V_BIT;
+  }
+
+  return mask;
+}
+
 uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex)
 {
   uint8_t canAlive;
+  uint8_t otherBatteryIndex;
+  uint8_t otherDischarging;
 
   if ((batteryIndex < 1U) || (batteryIndex > 2U))
   {
@@ -841,21 +832,28 @@ uint8_t Power_IsBatteryPhysicallyPresent(uint8_t batteryIndex)
 
   /*
    * 电池物理在位判定：
-   * 新硬件取消了 PA6/PA7 单电池模拟分压采样，无法直接通过板载 ADC 测量电池端子开路电压。
    * 1. 只要 CAN 保持在线通信，说明电池物理插入且处于开机通信状态，判定为在位 (1)；
-   * 2. 若 CAN 掉线，但该电池当前已经处于放电状态 (POWER_BATTERY_STATE_DISCHARGE)：
-   *    说明电池物理连接依然存在且正在为主机供电。
-   *    此时判定为物理在位 (1)，从而让 Power_DischargeModeTask 准确进入：
-   *    batteryAlarmStatus = BATTERY_ALARM_STATUS_CAN_COMM_LOST (0x01)，保持放电不断动力，
-   *    并通过 FDCAN3 上报 0x01 给小脑让机器狗受控阻尼下蹲，杜绝粗暴断电摔狗；
-   * 3. 其它状态下（未启动放电）CAN 超时则判定为不在位 (0)。
+   * 2. 若 CAN 掉线，需区分单电池放电与双电池并联放电：
+   *    - 若当前处于放电状态 (POWER_BATTERY_STATE_DISCHARGE)，且另一路电池未处于放电态（单电池放电）：
+   *      这是系统唯一的动力来源，判定为物理在位 (1)，让状态机进入 CAN_COMM_LOST (0x01)
+   *      保持放电动力不断电，并通知小脑受控下蹲，杜绝粗暴断电摔狗；
+   *    - 若双路电池此前均处于放电状态 (双电池并联放电)：
+   *      某路 CAN 掉线说明该电池极大概率已被物理热拔出。
+   *      此时另一路电池健康在线，足以独立支撑系统运行；为杜绝放电/回充 MOS 持续导通导致空插座带电
+   *      以及后续热插入失去压差防倒灌保护，此处坚决判定为不在位 (0)，
+   *      促使状态机立即关断该路全部 MOS 并复位为 OFF；
+   * 3. 其它非放电状态下 CAN 超时均判定为不在位 (0)。
    */
   if (canAlive != 0U)
   {
     return 1U;
   }
 
-  if (((batteryIndex == 1U) ? battery1Control.state : battery2Control.state) == POWER_BATTERY_STATE_DISCHARGE)
+  otherBatteryIndex = (batteryIndex == 1U) ? 2U : 1U;
+  otherDischarging = (((otherBatteryIndex == 1U) ? battery1Control.state : battery2Control.state) == POWER_BATTERY_STATE_DISCHARGE) ? 1U : 0U;
+
+  if ((((batteryIndex == 1U) ? battery1Control.state : battery2Control.state) == POWER_BATTERY_STATE_DISCHARGE) &&
+      (otherDischarging == 0U))
   {
     return 1U;
   }
@@ -939,21 +937,9 @@ static uint8_t Power_IsBatteryBmsMosFresh(uint8_t batteryIndex)
           ((now - battery2_can_mos_last_rx_tick) <= POWER_BATTERY_CAN_TIMEOUT_MS)) ? 1U : 0U;
 }
 
-static uint8_t Power_IsBatteryCanReady(uint8_t batteryIndex)
-{
-  return ((Power_IsBatteryCanAlive(batteryIndex) != 0U) &&
-          (Power_IsBatteryBmsDischargeAllowed(batteryIndex) != 0U)) ? 1U : 0U;
-}
-
 static float Power_GetBatteryCanVoltage(uint8_t batteryIndex)
 {
   return (batteryIndex == 1U) ? battery1_can_sum_voltage : battery2_can_sum_voltage;
-}
-
-__attribute__((unused))
-static float Power_GetBatteryEffectiveVoltage(uint8_t batteryIndex)
-{
-  return Power_GetBatteryCanVoltage(batteryIndex);
 }
 
 static float Power_GetBalancedVoltageDiff(void)
@@ -972,51 +958,78 @@ static float Power_GetBalancedVoltageDiff(void)
 static uint8_t Power_GetRechargeMaskByCanVoltage(uint8_t battery1Ready, uint8_t battery2Ready)
 {
   float voltageDiff;
+  uint32_t now = HAL_GetTick();
 
   if ((battery1Ready != 0U) && (battery2Ready != 0U))
   {
-    /* 若此前在双路在线状态下已确认达成压差平衡，维持全回充模式 */
-    if (rechargeCurrentOnlyMode != 0U)
-    {
-      return 0x03U;
-    }
-
-    /* 必须双路 CAN 均在线，测得的电芯电压差才具备防倒灌评估价值 */
+    /* 必须双路 CAN 均在线，平衡态与电芯压差才具备防倒灌评估价值 */
     if ((Power_IsBatteryCanAlive(1U) != 0U) && (Power_IsBatteryCanAlive(2U) != 0U))
     {
+      /* 若此前在双路在线状态下已确认达成压差平衡，维持全回充模式 */
+      if (rechargeCurrentOnlyMode != 0U)
+      {
+        return 0x03U;
+      }
+
       voltageDiff = Power_GetBalancedVoltageDiff();
 
       if (voltageDiff > POWER_RECHARGE_BALANCE_DIFF)
       {
+        rechargeBalanceSteadyStartTick = 0U;
         return 0x01U;
       }
 
       if (voltageDiff < -POWER_RECHARGE_BALANCE_DIFF)
       {
+        rechargeBalanceSteadyStartTick = 0U;
         return 0x02U;
       }
 
-      rechargeCurrentOnlyMode = 1U;
-      return 0x03U;
+      /* 压差进入平衡区间 (|V1 - V2| <= 0.10V)，需持续稳定 500ms 消抖确认 */
+      if (rechargeBalanceSteadyStartTick == 0U)
+      {
+        rechargeBalanceSteadyStartTick = now;
+      }
+
+      if ((now - rechargeBalanceSteadyStartTick) >= POWER_BALANCE_DEBOUNCE_MS)
+      {
+        rechargeCurrentOnlyMode = 1U;
+        return 0x03U;
+      }
+
+      /* 消抖确认等待期间，暂时开通电压略高一侧的回充 MOS */
+      return (voltageDiff >= 0.0f) ? 0x01U : 0x02U;
     }
 
     /*
-     * 边界保护：双电池放电但尚未达成平衡前，若任一电池 CAN 掉线，无法获知真实压差，
-     * 绝对禁止误判为平衡态（禁止置 rechargeCurrentOnlyMode = 1，禁止返回 0x03U）。
-     * 为彻底杜绝未知电压下的跨母线充电环流，双路回充 MOS 均置为关断 (0x00U)；
-     * 此时双电池主放电 MOS 仍保持导通为系统供电，待双路通信恢复后再行恢复回充裁决。
+     * 边界保护：若此前处于双电放电，但其中任一电池 CAN 掉线：
+     * 1. 立即重置平衡标志与消抖计时器，禁止全开双路回充；
+     * 2. 仅关断掉线电池的回充 MOS，保持健康在线电池的回充 MOS 导通（用于吸收电机反电动势）；
+     * 3. 掉线电池放电/回充 MOS 均被关断，母线间绝无环流风险，在线电池可安全吸收再生制动回充能量。
      */
+    rechargeCurrentOnlyMode = 0U;
+    rechargeBalanceSteadyStartTick = 0U;
+
+    if (Power_IsBatteryCanAlive(1U) != 0U)
+    {
+      return 0x01U;
+    }
+    if (Power_IsBatteryCanAlive(2U) != 0U)
+    {
+      return 0x02U;
+    }
     return 0x00U;
   }
 
   rechargeCurrentOnlyMode = 0U;
+  rechargeBalanceSteadyStartTick = 0U;
 
-  if (battery1Ready != 0U)
+  if ((battery1Ready != 0U) && (Power_IsBatteryCanAlive(1U) != 0U))
   {
     return 0x01U;
   }
 
-  if (battery2Ready != 0U)
+  if ((battery2Ready != 0U) && (Power_IsBatteryCanAlive(2U) != 0U))
   {
     return 0x02U;
   }
@@ -1084,7 +1097,7 @@ static void Power_UpdatePeripheralPower(uint8_t battery1Present, uint8_t battery
 
 static void Power_StartBattery1PreDischarge(void)
 {
-  HAL_GPIO_WritePin(BAT1_CHARGE_MOS_GPIO_Port, BAT1_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
@@ -1097,7 +1110,7 @@ static void Power_StartBattery1PreDischarge(void)
 
 static void Power_StartBattery2PreDischarge(void)
 {
-  HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
@@ -1212,7 +1225,7 @@ static void Power_UpdateBattery2Path(uint8_t present)
 
 static void Power_DisableBattery1Path(void)
 {
-  HAL_GPIO_WritePin(BAT1_CHARGE_MOS_GPIO_Port, BAT1_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
@@ -1223,11 +1236,13 @@ static void Power_DisableBattery1Path(void)
   }
 
   battery1Control.state = POWER_BATTERY_STATE_OFF;
+  rechargeCurrentOnlyMode = 0U;
+  rechargeBalanceSteadyStartTick = 0U;
 }
 
 static void Power_DisableBattery2Path(void)
 {
-  HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
@@ -1238,6 +1253,8 @@ static void Power_DisableBattery2Path(void)
   }
 
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  rechargeCurrentOnlyMode = 0U;
+  rechargeBalanceSteadyStartTick = 0U;
 }
 
 static void Power_UpdateRechargeMos(uint8_t battery1Ready, uint8_t battery2Ready)
@@ -1451,11 +1468,13 @@ void Power_UpdateBoardLeds(void)
   GPIO_PinState led3State = BOARD_LED_OFF;
 
   /* --- LED2: 板载系统运行心跳灯 (PB1) --- */
-  /* 若存在 CAN Bus-Off 错误或电池通信丢失等告警，5Hz 快速闪烁 (100ms 翻转)；
-   * 正常运行时以 1Hz 慢闪 (500ms 翻转) */
+  /* 若存在 CAN Bus-Off 错误、双电全无动力离线或电池 BMS 禁放故障，5Hz 快速闪烁 (100ms 翻转) 告警；
+   * 至少一路正常供电且无故障时（单电运行为常态健康），以 1Hz 慢闪 (500ms 翻转) 维持健康心跳 */
   uint8_t hasAlarm = ((FDCAN_IsAnyBusOff() != 0U) ||
-                      (battery1AlarmStatus != BATTERY_ALARM_STATUS_NORMAL) ||
-                      (battery2AlarmStatus != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
+                      (battery1AlarmStatus == BATTERY_ALARM_STATUS_PROHIBITED) ||
+                      (battery2AlarmStatus == BATTERY_ALARM_STATUS_PROHIBITED) ||
+                      ((battery1AlarmStatus == BATTERY_ALARM_STATUS_OFFLINE) &&
+                       (battery2AlarmStatus == BATTERY_ALARM_STATUS_OFFLINE))) ? 1U : 0U;
   if (hasAlarm != 0U)
   {
     led2State = (((now / 100U) % 2U) == 0U) ? BOARD_LED_ON : BOARD_LED_OFF;

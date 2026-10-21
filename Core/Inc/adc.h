@@ -57,10 +57,8 @@ void MX_ADC2_Init(void);
 void ADC2_StartDMA(void);
 void ADC2_StopDMA(void);
 void ADC_CalibrateCurrentOffsets(void);
-void ADC_CalibrateLegCurrentOffsets(void); /* 兼容旧接口名 */
 void ADC_UpdateCurrents(void);
 void ADC2_UpdateVbusVoltage(void);
-void ADC2_UpdateBatteryVoltages(void); /* 保持兼容接口名 */
 
 /* 模拟量读取接口 */
 float ADC_GetVbusVoltage(void);
@@ -68,30 +66,10 @@ float ADC_GetPeripheralDischargeCurrent(void);
 uint16_t ADC2_GetPeripheralDischargeCurrentADC(void);
 uint16_t ADC2_GetVbusVoltageADC(void);
 
-/* 兼容保留的废弃函数与变量接口（未接硬件，保持空实现避免链接报错） */
-uint16_t ADC1_GetLegCurrentADC(uint8_t leg);
-uint16_t ADC1_GetLegCurrentOffsetADC(uint8_t leg);
-uint16_t ADC1_GetBattery1CurrentADC(void);
-uint16_t ADC1_GetBattery2CurrentADC(void);
-float ADC_GetLegCurrent(uint8_t leg);
-float ADC_GetLeg1Current(void);
-float ADC_GetLeg2Current(void);
-float ADC_GetLeg3Current(void);
-float ADC_GetLeg4Current(void);
-float ADC_GetBattery1Current(void);
-float ADC_GetBattery2Current(void);
-float ADC2_GetBattery1Voltage(void);
-float ADC2_GetBattery2Voltage(void);
-
 /* 全局变量 */
 extern float vbus_voltage;
 extern uint16_t adc2_buffer[2];
 extern float peripheral_discharge_current;
-extern float battery1_voltage;
-extern float battery2_voltage;
-extern float leg_current[4];
-extern float battery1_current;
-extern float battery2_current;
 
 /* USER CODE END Prototypes */
 
