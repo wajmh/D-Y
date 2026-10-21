@@ -105,6 +105,11 @@ static uint8_t g_hotBootBatMask = 0U;
 */
 void MX_GPIO_Init(void)
 {
+  if (Power_IsHotBoot() != 0U)
+  {
+    Power_HotBootGpioInit(Power_GetHotBootBatMask());
+    return;
+  }
 
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
