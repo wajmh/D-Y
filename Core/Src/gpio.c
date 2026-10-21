@@ -59,6 +59,13 @@ static uint32_t vbusLowVoltageStartTick = 0U;
 static uint8_t battery1AbnormalDisconnected = 0U;
 static uint8_t vbusLowVoltageDetected = 0U;
 
+/* 电池过放保护状态机变量 */
+static volatile uint8_t overdischargeDebounceCount = 0U;
+static volatile uint8_t overdischargeTriggered = 0U;
+static volatile uint8_t overdischargeLatched = 0U;
+static volatile uint32_t overdischargeTriggerStartTick = 0U;
+static uint32_t lastProcessedBattery1RxCount = 0U;
+
 volatile uint8_t bat_charge_mos_state = 0U;
 volatile uint8_t bat1_charge_mos_state = 0U;
 volatile uint8_t bat1_discharge_mos_state = 0U;
@@ -84,6 +91,7 @@ static void Power_StartBattery1PreDischarge(void);
 static void Power_FinishBattery1PreDischarge(void);
 static void Power_EnableBattery1DischargePath(void);
 static void Power_TriggerAbnormalDisconnect(void);
+static void Power_ProcessBatteryOverdischarge(uint32_t now);
 
 static uint8_t g_isHotBoot = 0U;
 static uint8_t g_hotBootBatMask = 0U;
@@ -218,6 +226,13 @@ void Power_AllMosOff(void)
 
 HAL_StatusTypeDef Power_EnterDischargeMode(void)
 {
+  if (overdischargeLatched != 0U)
+  {
+    battery1Control.state = POWER_BATTERY_STATE_OFF;
+    Power_AllMosOff();
+    return HAL_ERROR;
+  }
+
   dischargeModeEnabled = 1U;
   powerWorkMode = POWER_WORK_MODE_DISCHARGE;
   battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
@@ -269,8 +284,23 @@ void Power_DischargeModeTask(void)
   uint8_t bat1BmsAllowed;
   uint8_t bat1BmsProhibited;
   uint8_t bat1BmsUnknown;
+  uint32_t now = HAL_GetTick();
 
   if (dischargeModeEnabled == 0U)
+  {
+    return;
+  }
+
+  /* 0. 电池过放关机已锁存：彻底保持 OFF 状态，禁止任何重新预充或开机 */
+  if (overdischargeLatched != 0U)
+  {
+    battery1Control.state = POWER_BATTERY_STATE_OFF;
+    return;
+  }
+
+  /* 0.1 电池 1 SOC 过放检测与 3 秒缓冲关机状态机 */
+  Power_ProcessBatteryOverdischarge(now);
+  if (overdischargeLatched != 0U)
   {
     return;
   }
@@ -327,6 +357,17 @@ void Power_DischargeModeTask(void)
    */
   if (battery1Control.state == POWER_BATTERY_STATE_OFF)
   {
+    if (overdischargeLatched != 0U)
+    {
+      return;
+    }
+    if (overdischargeTriggered != 0U)
+    {
+      /* 已处于过放保护状态且尚未开机，直接锁存并关闭所有 MOS */
+      overdischargeLatched = 1U;
+      Power_AllMosOff();
+      return;
+    }
     if (battery1AbnormalDisconnected != 0U)
     {
       /* 经历过异常断开：严格等待 BMS 通信就绪且允许放电才重新启动预放电软启动 */
@@ -352,7 +393,6 @@ void Power_DischargeModeTask(void)
   else /* POWER_BATTERY_STATE_DISCHARGE */
   {
     float currentVbus = ADC_GetVbusVoltage();
-    uint32_t now = HAL_GetTick();
 
     /* 监测母线欠压（VBUS < 30V 持续 10ms），判定为电池异常断开/关断 */
     if (currentVbus < POWER_VBUS_UNDER_VOLTAGE_THRESHOLD)
@@ -506,7 +546,18 @@ uint8_t Power_GetBattery2AlarmStatus(void)
 uint8_t Power_IsLocalFaultAlarmActive(void)
 {
   return ((FDCAN_IsAnyBusOff() != 0U) ||
-          (battery1AlarmStatus != BATTERY_ALARM_STATUS_NORMAL)) ? 1U : 0U;
+          (battery1AlarmStatus != BATTERY_ALARM_STATUS_NORMAL) ||
+          (overdischargeTriggered != 0U)) ? 1U : 0U;
+}
+
+uint8_t Power_GetOverdischargeStatus(void)
+{
+  return (overdischargeTriggered != 0U) ? POWER_OVERDISCHARGE_STATUS_TRIGGERED : POWER_OVERDISCHARGE_STATUS_NORMAL;
+}
+
+uint8_t Power_IsOverdischargeLatched(void)
+{
+  return overdischargeLatched;
 }
 
 static uint8_t Power_IsBatteryCanAlive(uint8_t batteryIndex)
@@ -602,6 +653,63 @@ static uint8_t Power_IsBatteryBmsMosFresh(uint8_t batteryIndex)
 
 
 
+static void Power_ProcessBatteryOverdischarge(uint32_t now)
+{
+  if (overdischargeLatched != 0U)
+  {
+    return;
+  }
+
+  /* 1. 若已触发过放保护，执行 3 秒缓冲倒计时 */
+  if (overdischargeTriggered != 0U)
+  {
+    if ((now - overdischargeTriggerStartTick) >= POWER_OVERDISCHARGE_GRACE_PERIOD_MS)
+    {
+      /* 3秒缓冲倒计时结束：彻底关断所有 MOS、DCDC 与外设供电，并永久锁存 */
+      overdischargeLatched = 1U;
+      Power_AllMosOff();
+      battery1Control.state = POWER_BATTERY_STATE_OFF;
+    }
+    return;
+  }
+
+  /* 2. 检查是否有新的 BMS 状态报文到来并进行连续 3 帧消抖判定 */
+  if (battery1_can_rx_count != lastProcessedBattery1RxCount)
+  {
+    lastProcessedBattery1RxCount = battery1_can_rx_count;
+
+    if (FDCAN_IsBatterySocValid(1U) != 0U)
+    {
+      float soc = FDCAN_GetBatterySoc(1U);
+      if (soc <= POWER_OVERDISCHARGE_SOC_THRESHOLD)
+      {
+        if (overdischargeDebounceCount < POWER_OVERDISCHARGE_DEBOUNCE_FRAMES)
+        {
+          overdischargeDebounceCount++;
+        }
+        if (overdischargeDebounceCount >= POWER_OVERDISCHARGE_DEBOUNCE_FRAMES)
+        {
+          /* 连续 3 帧确认 SOC <= 5%：触发过放保护并记录时间戳 */
+          overdischargeTriggered = 1U;
+          overdischargeTriggerStartTick = now;
+          /* 立即单次强制触发发送 0x04200000 报文给小脑 */
+          FDCAN_TriggerCurrentReportImmediate();
+        }
+      }
+      else
+      {
+        /* SOC > 5%，重置消抖计数器 */
+        overdischargeDebounceCount = 0U;
+      }
+    }
+    else
+    {
+      /* BMS 通信无效或掉线，重置消抖计数 */
+      overdischargeDebounceCount = 0U;
+    }
+  }
+}
+
 static void Power_TriggerAbnormalDisconnect(void)
 {
   /* 确认异常断开：切断主放电、回充、预充 MOS，并关断 12V/24V DCDC 与外设供电 */
@@ -626,6 +734,11 @@ static void Power_TriggerAbnormalDisconnect(void)
   battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
   vbusLowVoltageStartTick = 0U;
   vbusLowVoltageDetected = 0U;
+
+  if (overdischargeTriggered != 0U)
+  {
+    overdischargeLatched = 1U;
+  }
 }
 
 static void Power_StartBattery1PreDischarge(void)

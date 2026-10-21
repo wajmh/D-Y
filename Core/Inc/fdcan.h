@@ -137,7 +137,7 @@ typedef enum
 /* App 固件版本号定义 (三位版本: Major.Minor.Patch，例如 v1.4.0) */
 #define APP_FW_VERSION_MAJOR                     1U
 #define APP_FW_VERSION_MINOR                     4U
-#define APP_FW_VERSION_PATCH                     2U
+#define APP_FW_VERSION_PATCH                     3U
 
 void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData);
 void FDCAN_IAP_JumpToBootloader(void);
@@ -155,6 +155,7 @@ extern volatile RkIndicatorControl_t rkIndicatorCtrl;
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
+void FDCAN_TriggerCurrentReportImmediate(void);
 float FDCAN_GetBatterySoc(uint8_t batteryIndex);
 uint8_t FDCAN_IsBatterySocValid(uint8_t batteryIndex);
 uint8_t FDCAN_IsRkRgbActive(void);

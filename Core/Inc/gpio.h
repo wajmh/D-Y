@@ -130,6 +130,14 @@ extern "C" {
 #define POWER_VBUS_UNDER_VOLTAGE_THRESHOLD 30.0f /* 放电态母线电压低于 30V 判定为电池异常断开/失电 */
 #define POWER_VBUS_DISCONNECT_DEBOUNCE_MS  10U   /* 持续 10ms 消抖滤除电机瞬态扰动 */
 
+/* 电池过放保护判定与缓冲时序参数定义 */
+#define POWER_OVERDISCHARGE_SOC_THRESHOLD         5.0f   /* SOC <= 5.0% 判定为过放低电量 */
+#define POWER_OVERDISCHARGE_DEBOUNCE_FRAMES       3U     /* 连续 3 帧 BMS 状态报文确认消抖 */
+#define POWER_OVERDISCHARGE_GRACE_PERIOD_MS       3000U  /* 触发过放保护后 3000ms (3秒) 缓冲延迟 */
+
+#define POWER_OVERDISCHARGE_STATUS_NORMAL         0x00U  /* 正常放电状态 */
+#define POWER_OVERDISCHARGE_STATUS_TRIGGERED      0x01U  /* 已触发 SOC<=5% 过放保护 (缓冲中或已关断锁死) */
+
 /* 电池异常报警状态定义 */
 #define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常在线 */
 #define BATTERY_ALARM_STATUS_CAN_COMM_LOST           0x01U /* CAN 通信掉线；已处于放电态时保持本地路径 */
@@ -209,6 +217,8 @@ void Power_UpdateVbusPowerRelease(void);
 uint8_t Power_GetBattery1AlarmStatus(void);
 uint8_t Power_GetBattery2AlarmStatus(void);
 uint8_t Power_IsLocalFaultAlarmActive(void);
+uint8_t Power_GetOverdischargeStatus(void);
+uint8_t Power_IsOverdischargeLatched(void);
 
 /* 辅助外设控制 API */
 void Power_SetDcdc12V(uint8_t enable);

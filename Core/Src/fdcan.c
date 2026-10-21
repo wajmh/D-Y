@@ -444,9 +444,38 @@ static void FDCAN_SendCurrentReportsToRk(void)
   /* Byte 4: TIM8 斩波反电势泄放状态 (uint8_t, 0=未泄放, 1=泄放中) */
   peripheralTelemetryData[4] = (back_emf_absorb_state != 0U) ? 1U : 0U;
 
-  /* Byte 5~7: 预留填 0x00 */
+  /* Byte 5: 电池 1 当前 SOC 整数百分比 (uint8_t, 0~100%, 若无效则填 0xFF) */
+  if (FDCAN_IsBatterySocValid(1U) != 0U)
+  {
+    float soc = FDCAN_GetBatterySoc(1U);
+    if (soc > 100.0f)
+    {
+      soc = 100.0f;
+    }
+    else if (soc < 0.0f)
+    {
+      soc = 0.0f;
+    }
+    peripheralTelemetryData[5] = (uint8_t)(soc + 0.5f);
+  }
+  else
+  {
+    peripheralTelemetryData[5] = 0xFFU;
+  }
+
+  /* Byte 6: 电池过放保护状态 (uint8_t, 0x00=正常, 0x01=SOC<=5%过放已触发/保护中) */
+  peripheralTelemetryData[6] = Power_GetOverdischargeStatus();
+
+  /* Byte 7: 预留填 0x00 */
+  peripheralTelemetryData[7] = 0x00U;
 
   (void)FDCAN_SendCurrentReport(FDCAN_PERIPHERAL_CURRENT_REPORT_ID, peripheralTelemetryData);
+}
+
+void FDCAN_TriggerCurrentReportImmediate(void)
+{
+  FDCAN_SendCurrentReportsToRk();
+  currentReportLastTxTick = HAL_GetTick();
 }
 
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
