@@ -127,9 +127,8 @@ extern "C" {
 #define POWER_VBUS_RELEASE_PWM_DUTY        0U   /* TIM8_CH2/CH2N 互补 PWM 占空比 50% (ARR=99, Pulse=50) */
 
 /* 母线异常断开欠压检测阈值与消抖时间 */
-#define POWER_VBUS_UNDER_VOLTAGE_THRESHOLD 20.0f /* 放电态母线电压低于 20V 判定为电池异常断开/失电 */
-#define POWER_VBUS_DISCONNECT_DEBOUNCE_MS  20U   /* 持续 20ms 消抖滤除电机瞬态扰动 */
-#define POWER_VBUS_RECOVERY_THRESHOLD      30.0f /* 异常断开后 VBUS 恢复到 30V 以上时先打开外设供电以恢复 CAN 通信 */
+#define POWER_VBUS_UNDER_VOLTAGE_THRESHOLD 30.0f /* 放电态母线电压低于 30V 判定为电池异常断开/失电 */
+#define POWER_VBUS_DISCONNECT_DEBOUNCE_MS  10U   /* 持续 10ms 消抖滤除电机瞬态扰动 */
 
 /* 电池异常报警状态定义 */
 #define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常在线 */
