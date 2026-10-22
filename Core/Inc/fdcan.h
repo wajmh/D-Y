@@ -110,6 +110,10 @@ void MX_FDCAN3_Init(void);
 #define FDCAN_CHARGE_MODE_ENTER                  0x01U
 #define FDCAN_CHARGER_CAN_TIMEOUT_MS             3000U
 
+/* 电池总压物理合理性范围校验 (V)：过滤 BMS 通信单包瞬态 0V 或飞帧 */
+#define FDCAN_BATTERY_VOLTAGE_MIN                10.0f
+#define FDCAN_BATTERY_VOLTAGE_MAX                80.0f
+
 /* 小脑声光控制接口协议定义 */
 #define FDCAN_RK_INDICATOR_CMD_ID                0x04600000U
 #define FDCAN_RK_INDICATOR_STATUS_ID             0x04600001U

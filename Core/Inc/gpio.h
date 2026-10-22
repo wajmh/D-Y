@@ -106,8 +106,11 @@ extern "C" {
 #define POWER_BATTERY_CAN_TIMEOUT_MS       2000U
 /* 双电池回充 MOS 切换阈值，两个电池压差超过该值时只开高电压电池回充 */
 #define POWER_RECHARGE_BALANCE_DIFF        0.10f
-/* 充电模式下双电池压差在该阈值内时双开充电回路 */
-#define POWER_CHARGE_BALANCE_DIFF          0.10f
+/* 充电模式下双电池压差进入并联充电压差阈值 (V) */
+#define POWER_CHARGE_BALANCE_ENTER_DIFF    0.15f
+#define POWER_CHARGE_BALANCE_DIFF          POWER_CHARGE_BALANCE_ENTER_DIFF /* 兼容旧别名 */
+/* 充电模式下双电池压差迟滞退出并联阈值 (V)：防止并联偏流，压差再次拉大时回退至单侧欠电快充 */
+#define POWER_CHARGE_BALANCE_EXIT_DIFF     0.30f
 /* 双电池压差平衡锁存确认消抖持续时间 (ms) */
 #define POWER_BALANCE_DEBOUNCE_MS          500U
 /* 充电模式下维持 VBUS 供电的防频繁切换迟滞电压 (V) */
@@ -119,11 +122,14 @@ extern "C" {
 /* 双回充 MOS 打开后，某路电流占总电流低于该比例，认为疑似未放电 */
 #define POWER_BATTERY_CURRENT_MIN_SHARE    0.10f
 
+/* 反电势吸收泄放功能总使能开关：1 为启用，0 为软件完全关闭 (关闭时 TIM8 输出强制钳位拉低且锁定状态为 0) */
+#define POWER_VBUS_RELEASE_ENABLE          0U
+
 /* VBUS 泄放动作阈值：放电模式下超过 85V 通过 TIM8 互补 PWM (50%) 开启交替斩波泄放；回落至 84V 关闭 (1V滞回防抖)
- * 【调试模式说明】：当前设置为 999V / 0% PWM 临时关闭物理泄放用于调试排查；实机验证完成后可按需恢复为 85.0f / 84.0f / 50U */
+ * 【说明】：当 POWER_VBUS_RELEASE_ENABLE 为 0 时，底层强制关闭 TIM8 并硬件钳位拉低，以下阈值常驻不生效 */
 #define POWER_VBUS_RELEASE_OPEN_VOLTAGE    999.0f
 #define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   999.0f
-#define POWER_VBUS_RELEASE_PWM_DUTY        0U   /* 调试关闭：PWM 占空比置 0 (正常为 50U) */
+#define POWER_VBUS_RELEASE_PWM_DUTY        50U   /* PWM 占空比 50% */
 
 /* ==================== 电池在线与告警状态定义 (V1.5 极简3态) ==================== */
 #define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常就绪 (CAN在线且BMS明确允许放电) */

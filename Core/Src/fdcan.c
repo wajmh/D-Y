@@ -566,7 +566,7 @@ static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
   {
     filterConfig.FilterIndex = filterIndex;
     filterConfig.FilterID1 = FDCAN_CHARGE_MODE_CMD_ID;
-    filterConfig.FilterID2 = 0x1FFFFFFFU;
+    filterConfig.FilterID2 = 0x1FFFFFFFU; /* 精确匹配 0x0500FF80 充电桩广播握手帧 */
 
     if (HAL_FDCAN_ConfigFilter(hfdcan, &filterConfig) != HAL_OK)
     {
@@ -748,7 +748,10 @@ static void FDCAN_ParseBatteryStatus(uint8_t batteryIndex, uint32_t rxId, const 
 
   if (batteryIndex == 1U)
   {
-    battery1_can_sum_voltage = sumVoltage;
+    if ((sumVoltage >= FDCAN_BATTERY_VOLTAGE_MIN) && (sumVoltage <= FDCAN_BATTERY_VOLTAGE_MAX))
+    {
+      battery1_can_sum_voltage = sumVoltage;
+    }
     battery1_can_current = current;
     if (hasSoc != 0U)
     {
@@ -761,7 +764,10 @@ static void FDCAN_ParseBatteryStatus(uint8_t batteryIndex, uint32_t rxId, const 
   }
   else
   {
-    battery2_can_sum_voltage = sumVoltage;
+    if ((sumVoltage >= FDCAN_BATTERY_VOLTAGE_MIN) && (sumVoltage <= FDCAN_BATTERY_VOLTAGE_MAX))
+    {
+      battery2_can_sum_voltage = sumVoltage;
+    }
     battery2_can_current = current;
     if (hasSoc != 0U)
     {
@@ -913,6 +919,7 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
 
     if ((hfdcan->Instance == FDCAN3) &&
         (rxHeader.IdType == FDCAN_EXTENDED_ID) &&
+        (rxHeader.RxFrameType == FDCAN_DATA_FRAME) &&
         (rxHeader.Identifier == FDCAN_CHARGE_MODE_CMD_ID))
     {
       uint32_t now = HAL_GetTick();
@@ -966,6 +973,10 @@ static void FDCAN_HandleRkChargeModeCommand(const FDCAN_RxHeaderTypeDef *rxHeade
   if (rxData[0] == FDCAN_CHARGE_MODE_ENTER)
   {
     rk_charge_mode_request = 1U;
+    if (charge_mode_active != 0U)
+    {
+      FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_ENTER);
+    }
     return;
   }
 
