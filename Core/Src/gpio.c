@@ -81,6 +81,7 @@ volatile uint8_t back_emf_absorb_1_state = 0U;
 volatile uint8_t back_emf_absorb_2_state = 0U;
 volatile uint8_t dcdc_12v_state = 0U;
 volatile uint8_t dcdc_24v_state = 0U;
+volatile uint8_t emergency_stop_active = 0U;
 
 static uint8_t Power_IsBatteryCanAlive(uint8_t batteryIndex);
 static uint8_t Power_IsBatteryBmsDischargeAllowed(uint8_t batteryIndex);
@@ -126,6 +127,7 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_2
@@ -169,6 +171,12 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : EMERGENCY_STOP_Pin */
+  GPIO_InitStruct.Pin = EMERGENCY_STOP_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(EMERGENCY_STOP_GPIO_Port, &GPIO_InitStruct);
+
 }
 
 /* USER CODE BEGIN 2 */
@@ -192,6 +200,45 @@ void Power_UpdateGpioDebugStates(void)
                              (__HAL_TIM_GET_COMPARE(&htim8, TIM_CHANNEL_2) > 0U)) ? 1U : 0U;
   back_emf_absorb_1_state = back_emf_absorb_2_state;
   back_emf_absorb_state = back_emf_absorb_2_state;
+  emergency_stop_active = Power_IsEmergencyStopActive();
+}
+
+GPIO_PinState Power_ReadEmergencyStop(void)
+{
+  return HAL_GPIO_ReadPin(EMERGENCY_STOP_GPIO_Port, EMERGENCY_STOP_Pin);
+}
+
+uint8_t Power_IsEmergencyStopActive(void)
+{
+  static uint8_t initialized = 0U;
+  static GPIO_PinState lastRawState = GPIO_PIN_SET;
+  static GPIO_PinState debouncedState = GPIO_PIN_SET;
+  static uint32_t lastChangeTick = 0U;
+  GPIO_PinState rawState = Power_ReadEmergencyStop();
+  uint32_t now = HAL_GetTick();
+
+  if (initialized == 0U)
+  {
+    lastRawState = rawState;
+    debouncedState = rawState;
+    lastChangeTick = now;
+    initialized = 1U;
+  }
+  else
+  {
+    if (rawState != lastRawState)
+    {
+      lastRawState = rawState;
+      lastChangeTick = now;
+    }
+
+    if ((now - lastChangeTick) >= POWER_ESTOP_DEBOUNCE_MS)
+    {
+      debouncedState = lastRawState;
+    }
+  }
+
+  return (debouncedState == POWER_ESTOP_ACTIVE_STATE) ? 1U : 0U;
 }
 
 void Power_AllMosOff(void)
@@ -1080,6 +1127,7 @@ void Power_HotBootGpioInit(uint8_t batMask)
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /* 1. 先设置输出数据寄存器 (ODR/BSRR)，确保引脚配置为输出时不出现任何电平跌落 */
   /* GPIOC: PC4 (24V DCDC, 低使能), PC2 (绿灯), PC11 (Bat2主放电, 单电池版本强制关) */
@@ -1115,5 +1163,11 @@ void Power_HotBootGpioInit(uint8_t batMask)
 
   GPIO_InitStruct.Pin = LED2_Pin | LED3_Pin | GPIO_PIN_10 | GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_9;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* 3. 配置急停输入引脚 (PD2) */
+  GPIO_InitStruct.Pin = EMERGENCY_STOP_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(EMERGENCY_STOP_GPIO_Port, &GPIO_InitStruct);
 }
 /* USER CODE END 2 */

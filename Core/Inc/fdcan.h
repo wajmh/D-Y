@@ -83,6 +83,11 @@ extern volatile uint32_t battery2_can_mos_last_rx_tick;
 extern volatile uint8_t rk_charge_mode_request;
 extern volatile uint8_t charge_mode_active;
 
+/* 硬件急停状态上报定义 (小脑 FDCAN2 总线: ID 0x04300000) */
+#define FDCAN_ESTOP_REPORT_ID                    0x04300000U
+#define FDCAN_ESTOP_ACTIVE_REPORT_PERIOD_MS      50U
+#define FDCAN_ESTOP_IDLE_REPORT_PERIOD_MS        500U
+
 #define FDCAN_BATTERY_ALARM_REPORT_ID            0x04400000U
 #define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS     100U
 #define FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS  100U
@@ -137,7 +142,7 @@ typedef enum
 /* App 固件版本号定义 (三位版本: Major.Minor.Patch，例如 v1.4.0) */
 #define APP_FW_VERSION_MAJOR                     1U
 #define APP_FW_VERSION_MINOR                     4U
-#define APP_FW_VERSION_PATCH                     3U
+#define APP_FW_VERSION_PATCH                     4U
 
 void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData);
 void FDCAN_IAP_JumpToBootloader(void);
@@ -154,6 +159,7 @@ extern volatile RkIndicatorControl_t rkIndicatorCtrl;
 
 void FDCAN_BatteryCanStart(void);
 void FDCAN_BatteryCanTask(void);
+HAL_StatusTypeDef FDCAN_SendEmergencyStopReportToRk(uint8_t isActive);
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
 void FDCAN_TriggerCurrentReportImmediate(void);
 float FDCAN_GetBatterySoc(uint8_t batteryIndex);

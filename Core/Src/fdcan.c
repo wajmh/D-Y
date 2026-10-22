@@ -37,8 +37,11 @@
 #define FDCAN_BATTERY_ID_MASK        0x1FFFFF00U
 #define FDCAN_PERIPHERAL_CURRENT_REPORT_ID 0x04200000U
 #define FDCAN_PERIPHERAL_TELEMETRY_REPORT_ID FDCAN_PERIPHERAL_CURRENT_REPORT_ID
+#define FDCAN_ESTOP_REPORT_ID        0x04300000U
 #define FDCAN_BATTERY_ALARM_REPORT_ID 0x04400000U
 #define FDCAN_CURRENT_REPORT_PERIOD_MS 200U
+#define FDCAN_ESTOP_ACTIVE_REPORT_PERIOD_MS 50U
+#define FDCAN_ESTOP_IDLE_REPORT_PERIOD_MS 500U
 #define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS 100U
 #define FDCAN_CURRENT_REPORT_SCALE    100.0f
 #define FDCAN_VBUS_REPORT_SCALE       100.0f
@@ -54,6 +57,8 @@ static uint8_t bat2ProhibitDebounceCount = 0U;
 static uint8_t bat2UnknownDebounceCount = 0U;
 static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t currentReportLastTxTick = 0U;
+static uint32_t estopReportLastTxTick = 0U;
+static uint8_t prevEstopActiveState = 0xFFU;
 static uint32_t batteryAlarmReportLastTxTick = 0U;
 volatile uint32_t battery_can_forward_count = 0U;
 volatile uint32_t battery_can_forward_drop_count = 0U;
@@ -476,6 +481,13 @@ void FDCAN_TriggerCurrentReportImmediate(void)
 {
   FDCAN_SendCurrentReportsToRk();
   currentReportLastTxTick = HAL_GetTick();
+}
+
+HAL_StatusTypeDef FDCAN_SendEmergencyStopReportToRk(uint8_t isActive)
+{
+  uint8_t estopData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+  estopData[0] = (isActive != 0U) ? 0x01U : 0x00U;
+  return FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
 }
 
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
@@ -1350,6 +1362,31 @@ void FDCAN_BatteryCanTask(void)
     {
       currentReportLastTxTick = now;
       FDCAN_SendCurrentReportsToRk();
+    }
+
+    /* 硬件急停状态上报：跳变立即优先发送 + 双频保活策略 (触发激活 50ms, 正常释放 500ms) */
+    {
+      uint8_t currEstopActive = Power_IsEmergencyStopActive();
+      uint32_t estopPeriod = (currEstopActive != 0U) ? FDCAN_ESTOP_ACTIVE_REPORT_PERIOD_MS
+                                                     : FDCAN_ESTOP_IDLE_REPORT_PERIOD_MS;
+
+      /* 1. 状态跳变立即发送（含开机首次同步） */
+      if (currEstopActive != prevEstopActiveState)
+      {
+        if (FDCAN_SendEmergencyStopReportToRk(currEstopActive) == HAL_OK)
+        {
+          prevEstopActiveState = currEstopActive;
+          estopReportLastTxTick = now;
+        }
+      }
+      /* 2. 周期保活上报 */
+      else if ((now - estopReportLastTxTick) >= estopPeriod)
+      {
+        if (FDCAN_SendEmergencyStopReportToRk(currEstopActive) == HAL_OK)
+        {
+          estopReportLastTxTick = now;
+        }
+      }
     }
 
     /* 超时跳变检测：若此前受控且本次检测已超时离线，立即上报一次全灭/关断状态 */

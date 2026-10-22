@@ -111,6 +111,11 @@ extern "C" {
 #define POWER_DCDC_ON                      GPIO_PIN_RESET
 #define POWER_DCDC_OFF                     GPIO_PIN_SET
 
+/* ==================== 硬件急停信号输入 (PD2) ==================== */
+/* 急停有效电平：硬件按键拍下闭合导通光耦使 PD2 拉低，故为低电平有效 (Active Low / RESET) */
+#define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_RESET
+#define POWER_ESTOP_DEBOUNCE_MS            30U
+
 /* 预放电等待时间，单位 ms */
 #define POWER_PRE_DISCHARGE_DELAY_MS       400U
 /* 主放电 MOS 打开后预充 MOS 延时关闭时间（重叠导通缓冲），单位 ms */
@@ -204,6 +209,10 @@ extern volatile uint8_t back_emf_absorb_1_state;
 extern volatile uint8_t back_emf_absorb_2_state;
 extern volatile uint8_t dcdc_12v_state;
 extern volatile uint8_t dcdc_24v_state;
+extern volatile uint8_t emergency_stop_active;
+
+GPIO_PinState Power_ReadEmergencyStop(void);
+uint8_t Power_IsEmergencyStopActive(void);
 
 void Power_UpdateGpioDebugStates(void);
 void Power_AllMosOff(void);
