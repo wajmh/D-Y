@@ -206,7 +206,7 @@ void Power_AllMosOff(void)
   HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
 
   /* 反电势吸收泄放关闭：禁用 TIM8 主输出 (MOE) 并将占空比置 0，两路输出硬件拉低至 GND */
-  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
   back_emf_absorb_1_state = 0U;
   back_emf_absorb_2_state = 0U;
@@ -488,7 +488,7 @@ void Power_UpdateVbusPowerRelease(void)
     }
     else if (currentVbus <= POWER_VBUS_RELEASE_CLOSE_VOLTAGE)
     {
-      __HAL_TIM_MOE_DISABLE(&htim8);
+      __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
       __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
       back_emf_absorb_2_state = 0U;
     }
@@ -496,7 +496,7 @@ void Power_UpdateVbusPowerRelease(void)
   }
   else
   {
-    __HAL_TIM_MOE_DISABLE(&htim8);
+    __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
     back_emf_absorb_2_state = 0U;
   }
@@ -721,7 +721,7 @@ static void Power_TriggerAbnormalDisconnect(void)
   Power_SetDcdc24V(0U);
 
   /* 关闭反电势泄放 */
-  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
   back_emf_absorb_1_state = 0U;
   back_emf_absorb_2_state = 0U;

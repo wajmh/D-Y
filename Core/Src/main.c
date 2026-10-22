@@ -103,7 +103,7 @@ int main(void)
   ADC2_StartDMA();
   HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
   HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
-  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
   if (Power_IsHotBoot() == 0U)
   {

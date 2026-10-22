@@ -989,7 +989,7 @@ void FDCAN_IAP_JumpToBootloader(void)
   ADC2_StopDMA();
 
   /* 3. 关闭反电势泄放 PWM 定时器 (TIM8 互补输出) */
-  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   (void)HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_2);
   (void)HAL_TIMEx_PWMN_Stop(&htim8, TIM_CHANNEL_2);
   __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);

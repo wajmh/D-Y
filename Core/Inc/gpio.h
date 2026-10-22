@@ -122,9 +122,9 @@ extern "C" {
 #define POWER_BATTERY_BOOT_GRACE_PERIOD_MS 4000U
 
 /* VBUS 泄放动作阈值：放电模式下超过 85V 通过 TIM8 互补 PWM (50%) 开启交替斩波泄放；回落至 84V 关闭 (1V滞回防抖) */
-#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    999.0f
-#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   999.0f
-#define POWER_VBUS_RELEASE_PWM_DUTY        0U   /* TIM8_CH2/CH2N 互补 PWM 占空比 50% (ARR=99, Pulse=50) */
+#define POWER_VBUS_RELEASE_OPEN_VOLTAGE    85.0f
+#define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   84.0f
+#define POWER_VBUS_RELEASE_PWM_DUTY        50U   /* TIM8_CH2/CH2N 互补 PWM 占空比 50% (ARR=99, Pulse=50) */
 
 /* 母线异常断开欠压检测阈值与消抖时间 */
 #define POWER_VBUS_UNDER_VOLTAGE_THRESHOLD 30.0f /* 放电态母线电压低于 30V 判定为电池异常断开/失电 */
