@@ -103,6 +103,11 @@ void MX_FDCAN3_Init(void);
 #define FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS     500U
 #define FDCAN_BATTERY_ALARM_HEARTBEAT_PERIOD_MS  FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS /* 兼容旧别名：统一 500ms 心跳 */
 
+/* 急停状态上报 (小脑 FDCAN2 总线) */
+#define FDCAN_ESTOP_REPORT_ID                    0x04300000U
+#define FDCAN_ESTOP_ACTIVE_REPORT_PERIOD_MS      50U   /* 急停触发锁定期间：50ms 高频周期保活 */
+#define FDCAN_ESTOP_NORMAL_REPORT_PERIOD_MS      500U  /* 平时正常释放期间：500ms 低频心跳保活 */
+
 #define FDCAN_CHARGE_MODE_CMD_ID                 0x0500FF80U
 #define FDCAN_RK_CHARGE_MODE_CMD_ID              0x04500000U
 #define FDCAN_RK_CHARGE_MODE_STATUS_ID           0x04500001U
@@ -178,6 +183,7 @@ void FDCAN_BatteryCanTask(void);
 HAL_StatusTypeDef FDCAN_SendBusTelemetryReportToRk(void);
 #define FDCAN_SendPeripheralCurrentReportToRk FDCAN_SendBusTelemetryReportToRk /* 兼容旧别名 */
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
+HAL_StatusTypeDef FDCAN_SendEmergencyStopReportToRk(uint8_t estopActive);
 HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex);
 #define FDCAN_SendChargeReplyToCan2 FDCAN_SendChargeReplyToCharger /* 兼容旧命名别名 */
 float FDCAN_GetBatterySoc(uint8_t batteryIndex);

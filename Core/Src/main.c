@@ -102,10 +102,16 @@ int main(void)
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
   ADC2_StartDMA();
+#if POWER_VBUS_RELEASE_ENABLE
   HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
   HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
-  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
+#else
+  /* 泄放功能完全禁用：上电不启动互补 PWM 通道，无条件关闭主输出 MOE 并将占空比置 0 */
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
+  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
+#endif
   if (Power_IsHotBoot() == 0U)
   {
     HAL_Delay(20);

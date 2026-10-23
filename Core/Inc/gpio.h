@@ -94,6 +94,9 @@ extern "C" {
 /* 默认按高电平打开 MOS；如果硬件是低电平有效，需要改这里 */
 #define POWER_SWITCH_ON                    GPIO_PIN_SET
 #define POWER_SWITCH_OFF                   GPIO_PIN_RESET
+/* 急停有效电平：常开触点接 GND，按下接地拉低为 0 (GPIO_PIN_RESET)，旋转释放被内部上拉为 1 */
+#define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_RESET
+#define POWER_ESTOP_DEBOUNCE_MS            30U
 /* DCDC 电源使能控制：硬件为低电平使能 (Active-Low) */
 #define POWER_DCDC_ON                      GPIO_PIN_RESET
 #define POWER_DCDC_OFF                     GPIO_PIN_SET
@@ -238,6 +241,10 @@ uint8_t Power_GetPhysicalB(void);
 uint8_t Power_GetPhysicalY(void);
 uint8_t Power_GetPhysicalBuzzer(void);
 void Power_TriggerBootBeep(void);
+
+/* 急停检测 API */
+GPIO_PinState Power_ReadEmergencyStop(void);
+uint8_t Power_IsEmergencyStopActive(void);
 
 /* IAP 无缝热接力支持接口 */
 uint8_t Power_GetActiveDischargeMask(void);

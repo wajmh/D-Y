@@ -141,6 +141,7 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_2
@@ -184,6 +185,12 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : EMERGENCY_STOP_Pin */
+  GPIO_InitStruct.Pin = EMERGENCY_STOP_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(EMERGENCY_STOP_GPIO_Port, &GPIO_InitStruct);
+
 }
 
 /* USER CODE BEGIN 2 */
@@ -214,6 +221,45 @@ void Power_UpdateGpioDebugStates(void)
 #endif
 }
 
+GPIO_PinState Power_ReadEmergencyStop(void)
+{
+  return HAL_GPIO_ReadPin(EMERGENCY_STOP_GPIO_Port, EMERGENCY_STOP_Pin);
+}
+
+uint8_t Power_IsEmergencyStopActive(void)
+{
+  static GPIO_PinState debouncedState = GPIO_PIN_SET;
+  static GPIO_PinState lastRawState = GPIO_PIN_SET;
+  static uint32_t lastChangeTick = 0U;
+  static uint8_t initialized = 0U;
+
+  GPIO_PinState rawState = Power_ReadEmergencyStop();
+  uint32_t now = HAL_GetTick();
+
+  if (initialized == 0U)
+  {
+    debouncedState = rawState;
+    lastRawState = rawState;
+    lastChangeTick = now;
+    initialized = 1U;
+  }
+  else
+  {
+    if (rawState != lastRawState)
+    {
+      lastRawState = rawState;
+      lastChangeTick = now;
+    }
+
+    if ((now - lastChangeTick) >= POWER_ESTOP_DEBOUNCE_MS)
+    {
+      debouncedState = lastRawState;
+    }
+  }
+
+  return (debouncedState == POWER_ESTOP_ACTIVE_STATE) ? 1U : 0U;
+}
+
 void Power_AllMosOff(void)
 {
   HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
@@ -225,8 +271,8 @@ void Power_AllMosOff(void)
   HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
 
-  /* 反电势吸收泄放关闭：禁用 TIM8 主输出 (MOE) 并将占空比置 0，两路输出硬件拉低至 GND */
-  __HAL_TIM_MOE_DISABLE(&htim8);
+  /* 反电势吸收泄放关闭：无条件禁用 TIM8 主输出 (MOE) 并将占空比置 0，两路输出硬件拉低至 GND */
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
   back_emf_absorb_1_state = 0U;
   back_emf_absorb_2_state = 0U;
@@ -474,11 +520,8 @@ void Power_UpdateVbusPowerRelease(void)
 #if (!POWER_VBUS_RELEASE_ENABLE)
   uint8_t prevAbsorbState = back_emf_absorb_state;
 
-  /* 软件完全关闭泄放功能：关闭 TIM8 主输出 (MOE) 并将占空比置 0，PC7/PB0 硬件强制拉低至 GND */
-  if ((htim8.Instance->BDTR & TIM_BDTR_MOE) != 0U)
-  {
-    __HAL_TIM_MOE_DISABLE(&htim8);
-  }
+  /* 软件完全关闭泄放功能：无条件关闭 TIM8 主输出 (MOE) 并将占空比置 0，PC7/PB0 硬件强制拉低至 GND */
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
   back_emf_absorb_2_state = 0U;
   back_emf_absorb_1_state = 0U;
@@ -519,7 +562,7 @@ void Power_UpdateVbusPowerRelease(void)
     }
     else if (currentVbus <= POWER_VBUS_RELEASE_CLOSE_VOLTAGE)
     {
-      __HAL_TIM_MOE_DISABLE(&htim8);
+      __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
       __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
       back_emf_absorb_2_state = 0U;
     }
@@ -527,7 +570,7 @@ void Power_UpdateVbusPowerRelease(void)
   }
   else
   {
-    __HAL_TIM_MOE_DISABLE(&htim8);
+    __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
     back_emf_absorb_2_state = 0U;
   }

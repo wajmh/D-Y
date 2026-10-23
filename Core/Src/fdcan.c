@@ -59,6 +59,7 @@ static uint8_t bat2UnknownDebounceCount = 0U;
 static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t busTelemetryReportLastTxTick = 0U;
 static uint32_t batteryAlarmReportLastTxTick = 0U;
+static uint32_t estopReportLastTxTick = 0U;
 
 typedef struct
 {
@@ -487,6 +488,15 @@ HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void)
   alarmData[7] = (uint8_t)(Power_GetAuxPowerStatusMask() & 0x07U);
 
   return FDCAN_SendCurrentReport(FDCAN_BATTERY_ALARM_REPORT_ID, alarmData);
+}
+
+HAL_StatusTypeDef FDCAN_SendEmergencyStopReportToRk(uint8_t estopActive)
+{
+  uint8_t estopData[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+
+  estopData[0] = (estopActive != 0U) ? 0x01U : 0x00U;
+
+  return FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
 }
 
 static void FDCAN_SendChargeModeStatusToRk(uint8_t status)
@@ -1078,7 +1088,7 @@ void FDCAN_IAP_JumpToBootloader(void)
   ADC2_StopDMA();
 
   /* 3. 关闭反电势泄放 PWM 定时器 (TIM8 互补输出) */
-  __HAL_TIM_MOE_DISABLE(&htim8);
+  __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   (void)HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_2);
   (void)HAL_TIMEx_PWMN_Stop(&htim8, TIM_CHANNEL_2);
   __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U);
@@ -1424,6 +1434,7 @@ void FDCAN_BatteryCanStart(void)
   batteryCanLastTxTick = HAL_GetTick() - FDCAN_BATTERY_WAKE_PERIOD_MS;
   busTelemetryReportLastTxTick = HAL_GetTick();
   batteryAlarmReportLastTxTick = HAL_GetTick() - FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS;
+  estopReportLastTxTick = HAL_GetTick() - FDCAN_ESTOP_NORMAL_REPORT_PERIOD_MS;
 }//负责初始化接收过滤器并启动 CAN。
 
 void FDCAN_BatteryCanTask(void)
@@ -1523,6 +1534,51 @@ void FDCAN_BatteryCanTask(void)
     {
       busTelemetryReportLastTxTick = now;
       (void)FDCAN_SendBusTelemetryReportToRk();
+    }
+
+    /* ==================== 急停状态上报 (0x04300000) ====================
+     * 1. 载荷定义：Byte 0: 0x01 (急停触发锁定) / 0x00 (急停释放复位)，Byte 1~7 填充 0x00；
+     * 2. 跳变瞬发：急停按下或旋转复位瞬间，立即触发单次优先发送（若发送遇忙则保持挂起重试，杜绝事件丢失）；
+     * 3. 双频保活：急停触发期间以 50ms 高频周期持续上报；平时正常释放时以 500ms 低频心跳保活。
+     */
+    {
+      static uint8_t estopInitialized = 0U;
+      static uint8_t prevEstopActive = 0U;
+      static uint8_t estopChangedPending = 0U;
+
+      uint8_t curEstopActive = Power_IsEmergencyStopActive();
+
+      if (estopInitialized == 0U)
+      {
+        prevEstopActive = curEstopActive;
+        estopChangedPending = 1U; /* 上电开机立即发送一次当前急停初态 */
+        estopInitialized = 1U;
+      }
+      else if (curEstopActive != prevEstopActive)
+      {
+        estopChangedPending = 1U; /* 状态跳变立即优先触发发送 */
+        prevEstopActive = curEstopActive;
+      }
+
+      uint32_t estopPeriod = (curEstopActive != 0U) ?
+                             FDCAN_ESTOP_ACTIVE_REPORT_PERIOD_MS :
+                             FDCAN_ESTOP_NORMAL_REPORT_PERIOD_MS;
+
+      if (estopChangedPending != 0U)
+      {
+        if (FDCAN_SendEmergencyStopReportToRk(curEstopActive) == HAL_OK)
+        {
+          estopReportLastTxTick = now;
+          estopChangedPending = 0U;
+        }
+      }
+      else if ((now - estopReportLastTxTick) >= estopPeriod)
+      {
+        if (FDCAN_SendEmergencyStopReportToRk(curEstopActive) == HAL_OK)
+        {
+          estopReportLastTxTick = now;
+        }
+      }
     }
 
     /* 超时跳变检测：若此前受控且本次检测已超时离线，立即上报一次全灭/关断状态 */
