@@ -56,8 +56,9 @@ static uint8_t rechargeCurrentOnlyMode = 0U;
 static uint32_t rechargeBalanceSteadyStartTick = 0U;
 static uint8_t chargeCurrentOnlyMode = 0U;
 static uint32_t chargeBalanceSteadyStartTick = 0U;
-static uint32_t chargeExitSteadyStartTick = 0U;
 static uint32_t chargeSingleSwitchSteadyStartTick = 0U;
+static uint8_t chargeActiveSingleBat = 0U;
+static uint8_t chargeSingleSwitchedOnce = 0U;
 static uint8_t chargeReplyBatteryIndex = 0U;
 static uint32_t chargeReplyLastTxTick = 0U;
 static uint8_t battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
@@ -196,19 +197,32 @@ void MX_GPIO_Init(void)
 /* USER CODE BEGIN 2 */
 void Power_UpdateGpioDebugStates(void)
 {
-  bat_charge_mos_state = (HAL_GPIO_ReadPin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
-  bat1_charge_mos_state = bat_charge_mos_state;
+  uint8_t totalChargeMosOn = (HAL_GPIO_ReadPin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+
   bat1_discharge_mos_state = (HAL_GPIO_ReadPin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   bat1_recharge_mos_state = (HAL_GPIO_ReadPin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   bat1_pre_discharge_mos_state = (HAL_GPIO_ReadPin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
 
-  bat2_charge_mos_state = bat_charge_mos_state;
   bat2_discharge_mos_state = (HAL_GPIO_ReadPin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   bat2_recharge_mos_state = (HAL_GPIO_ReadPin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   bat2_pre_discharge_mos_state = (HAL_GPIO_ReadPin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
 
+  if (totalChargeMosOn != 0U)
+  {
+    bat1_charge_mos_state = ((bat1_discharge_mos_state != 0U) && (bat1_recharge_mos_state != 0U)) ? 1U : 0U;
+    bat2_charge_mos_state = ((bat2_discharge_mos_state != 0U) && (bat2_recharge_mos_state != 0U)) ? 1U : 0U;
+    bat_charge_mos_state = (uint8_t)(bat1_charge_mos_state | (uint8_t)(bat2_charge_mos_state << 1U));
+  }
+  else
+  {
+    bat1_charge_mos_state = 0U;
+    bat2_charge_mos_state = 0U;
+    bat_charge_mos_state = 0U;
+  }
+
   peripheral_power_state = (HAL_GPIO_ReadPin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
   dcdc_12v_state = (HAL_GPIO_ReadPin(DCDC_EN_12V_GPIO_Port, DCDC_EN_12V_Pin) == POWER_DCDC_ON) ? 1U : 0U;
+  dcdc_24v_state = (HAL_GPIO_ReadPin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin) == POWER_DCDC_ON) ? 1U : 0U;
 #if (!POWER_VBUS_RELEASE_ENABLE)
   back_emf_absorb_2_state = 0U;
   back_emf_absorb_1_state = 0U;
@@ -286,8 +300,9 @@ void Power_AllMosOff(void)
   rechargeBalanceSteadyStartTick = 0U;
   chargeCurrentOnlyMode = 0U;
   chargeBalanceSteadyStartTick = 0U;
-  chargeExitSteadyStartTick = 0U;
   chargeSingleSwitchSteadyStartTick = 0U;
+  chargeActiveSingleBat = 0U;
+  chargeSingleSwitchedOnce = 0U;
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
   Power_SetDcdc12V(0U);
   Power_SetDcdc24V(0U);
@@ -299,6 +314,8 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
   powerWorkMode = POWER_WORK_MODE_DISCHARGE;
   battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
+  chargeActiveSingleBat = 0U;
+  chargeSingleSwitchedOnce = 0U;
   chargeReplyBatteryIndex = 0U;
   chargeReplyLastTxTick = HAL_GetTick();
 
@@ -510,6 +527,8 @@ void Power_ExitDischargeMode(void)
   battery2Control.state = POWER_BATTERY_STATE_OFF;
   battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
+  chargeActiveSingleBat = 0U;
+  chargeSingleSwitchedOnce = 0U;
   chargeReplyBatteryIndex = 0U;
   chargeReplyLastTxTick = HAL_GetTick();
   Power_AllMosOff();
@@ -606,11 +625,13 @@ void Power_ModeTask(void)
     Power_UpdateChargeMode(battery1Present, battery2Present);
     Power_UpdatePeripheralPower(battery1Present, battery2Present);
     Power_UpdateVbusPowerRelease();
+    Power_UpdateGpioDebugStates();
     return;
   }
 
   Power_DischargeModeTask();
   Power_UpdateVbusPowerRelease();
+  Power_UpdateGpioDebugStates();
 }
 
 static void Power_MaintainChargeModeVbusPower(uint8_t battery1Present, uint8_t battery2Present)
@@ -691,9 +712,35 @@ static void Power_MaintainChargeModeVbusPower(uint8_t battery1Present, uint8_t b
 
 HAL_StatusTypeDef Power_EnterChargeMode(void)
 {
+  uint8_t bat1Ready;
+  uint8_t bat2Ready;
+  uint8_t inheritParallelCharge = 0U;
+
   if (powerWorkMode == POWER_WORK_MODE_CHARGE)
   {
     return HAL_OK;
+  }
+
+  bat1Ready = Power_IsBatteryCanPresent(1U);
+  bat2Ready = Power_IsBatteryCanPresent(2U);
+  if ((bat1Ready == 0U) && (bat2Ready == 0U))
+  {
+    return HAL_ERROR;
+  }
+
+  /*
+   * 若进入充电前双电池均就绪，且已处于并联放电平衡态 (rechargeCurrentOnlyMode != 0)
+   * 或两电池压差已在 0.15V 平衡阈值内，直接继承双充并网状态 (chargeCurrentOnlyMode = 1)，
+   * 杜绝切入充电瞬间无故关断某侧电池 MOS 造成跳变振荡。
+   */
+  if ((bat1Ready != 0U) && (bat2Ready != 0U))
+  {
+    float diff = Power_GetBatteryCanVoltage(1U) - Power_GetBatteryCanVoltage(2U);
+    float absDiff = (diff >= 0.0f) ? diff : -diff;
+    if ((rechargeCurrentOnlyMode != 0U) || (absDiff <= POWER_CHARGE_BALANCE_ENTER_DIFF))
+    {
+      inheritParallelCharge = 1U;
+    }
   }
 
   /* 1. 切入充电模式：关断预放电支路，释放预放电互斥索引 */
@@ -701,15 +748,16 @@ HAL_StatusTypeDef Power_EnterChargeMode(void)
   HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   powerPreDischargeBatteryIndex = 0U;
 
-  /* 2. 切入充电工作模式并复位时钟与消抖状态 */
+  /* 2. 切入充电工作模式并初始化平衡与消抖状态 */
   dischargeModeEnabled = 1U;
   powerWorkMode = POWER_WORK_MODE_CHARGE;
   rechargeCurrentOnlyMode = 0U;
   rechargeBalanceSteadyStartTick = 0U;
-  chargeCurrentOnlyMode = 0U;
+  chargeCurrentOnlyMode = inheritParallelCharge;
   chargeBalanceSteadyStartTick = 0U;
-  chargeExitSteadyStartTick = 0U;
   chargeSingleSwitchSteadyStartTick = 0U;
+  chargeActiveSingleBat = 0U;
+  chargeSingleSwitchedOnce = 0U;
   chargeReplyBatteryIndex = 0U;
   chargeReplyLastTxTick = HAL_GetTick() - POWER_CHARGE_REPLY_PERIOD_MS;
 
@@ -731,8 +779,9 @@ void Power_ExitChargeMode(void)
     rechargeBalanceSteadyStartTick = 0U;
     chargeCurrentOnlyMode = 0U;
     chargeBalanceSteadyStartTick = 0U;
-    chargeExitSteadyStartTick = 0U;
     chargeSingleSwitchSteadyStartTick = 0U;
+    chargeActiveSingleBat = 0U;
+    chargeSingleSwitchedOnce = 0U;
     chargeReplyBatteryIndex = 0U;
     chargeReplyLastTxTick = HAL_GetTick();
 
@@ -748,18 +797,14 @@ static uint8_t Power_IsBatteryCanPresent(uint8_t batteryIndex)
     return 1U;
   }
 #endif
-  uint32_t now = HAL_GetTick();
-
-  if (batteryIndex == 1U)
-  {
-    return ((battery1_can_rx_count != 0U) &&
-            (battery1_can_sum_voltage >= FDCAN_BATTERY_VOLTAGE_MIN) &&
-            ((now - battery1_can_status_last_rx_tick) <= POWER_BATTERY_CAN_TIMEOUT_MS)) ? 1U : 0U;
-  }
-
-  return ((battery2_can_rx_count != 0U) &&
-          (battery2_can_sum_voltage >= FDCAN_BATTERY_VOLTAGE_MIN) &&
-          ((now - battery2_can_status_last_rx_tick) <= POWER_BATTERY_CAN_TIMEOUT_MS)) ? 1U : 0U;
+  /*
+   * 充电模式电池准入条件：
+   * 必须同时满足 CAN 通信在线（含状态帧与 MOS 帧有效、总压 >= 10V）且 BMS 明确允许放电（电源键已按下开启）。
+   * 若电池未按电源开关（处于 BMS 禁放状态 0x02），其内部 BMS 功率管关断且板载高边驱动芯片无偏置供电，
+   * 严禁将其纳入充电目标，保持其板载放电与回充 MOS 关断隔离。
+   */
+  return ((Power_IsBatteryCanAlive(batteryIndex) != 0U) &&
+          (Power_IsBatteryBmsDischargeAllowed(batteryIndex) != 0U)) ? 1U : 0U;
 }
 
 /*
@@ -838,10 +883,9 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
       if (voltageDiff > POWER_CHARGE_BALANCE_ENTER_DIFF)
       {
         chargeBalanceSteadyStartTick = 0U;
-        chargeExitSteadyStartTick = 0U;
 
         /* 若当前正在单充 BAT1，切换到 BAT2 需持续稳定 500ms 消抖，防止 IR 抬升瞬态交替跳切 */
-        if (chargeReplyBatteryIndex == 1U)
+        if (chargeActiveSingleBat == 1U)
         {
           if (chargeSingleSwitchSteadyStartTick == 0U)
           {
@@ -851,8 +895,20 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
           if ((now - chargeSingleSwitchSteadyStartTick) >= POWER_BALANCE_DEBOUNCE_MS)
           {
             chargeSingleSwitchSteadyStartTick = 0U;
-            chargeMask = 0x02U;
-            replyBatteryIndex = 2U;
+            if (chargeSingleSwitchedOnce != 0U)
+            {
+              /* 此前已发生过单充换边，再次出现反向压差说明双电池开路电压已在内阻压降范围内达成平衡，直接锁存双充 */
+              chargeCurrentOnlyMode = 1U;
+              chargeActiveSingleBat = 0U;
+              chargeSingleSwitchedOnce = 0U;
+            }
+            else
+            {
+              chargeSingleSwitchedOnce = 1U;
+              chargeActiveSingleBat = 2U;
+              chargeMask = 0x02U;
+              replyBatteryIndex = 2U;
+            }
           }
           else
           {
@@ -864,6 +920,7 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
         else
         {
           chargeSingleSwitchSteadyStartTick = 0U;
+          chargeActiveSingleBat = 2U;
           chargeMask = 0x02U;
           replyBatteryIndex = 2U;
         }
@@ -871,10 +928,9 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
       else if (voltageDiff < -POWER_CHARGE_BALANCE_ENTER_DIFF)
       {
         chargeBalanceSteadyStartTick = 0U;
-        chargeExitSteadyStartTick = 0U;
 
         /* 若当前正在单充 BAT2，切换到 BAT1 需持续稳定 500ms 消抖，防止 IR 抬升瞬态交替跳切 */
-        if (chargeReplyBatteryIndex == 2U)
+        if (chargeActiveSingleBat == 2U)
         {
           if (chargeSingleSwitchSteadyStartTick == 0U)
           {
@@ -884,8 +940,20 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
           if ((now - chargeSingleSwitchSteadyStartTick) >= POWER_BALANCE_DEBOUNCE_MS)
           {
             chargeSingleSwitchSteadyStartTick = 0U;
-            chargeMask = 0x01U;
-            replyBatteryIndex = 1U;
+            if (chargeSingleSwitchedOnce != 0U)
+            {
+              /* 此前已发生过单充换边，再次出现反向压差说明双电池开路电压已在内阻压降范围内达成平衡，直接锁存双充 */
+              chargeCurrentOnlyMode = 1U;
+              chargeActiveSingleBat = 0U;
+              chargeSingleSwitchedOnce = 0U;
+            }
+            else
+            {
+              chargeSingleSwitchedOnce = 1U;
+              chargeActiveSingleBat = 1U;
+              chargeMask = 0x01U;
+              replyBatteryIndex = 1U;
+            }
           }
           else
           {
@@ -897,6 +965,7 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
         else
         {
           chargeSingleSwitchSteadyStartTick = 0U;
+          chargeActiveSingleBat = 1U;
           chargeMask = 0x01U;
           replyBatteryIndex = 1U;
         }
@@ -905,7 +974,6 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
       {
         /* 压差缩小至 0.15V 平衡区间，需持续稳定 500ms 消抖确认才锁存双充并网 */
         chargeSingleSwitchSteadyStartTick = 0U;
-        chargeExitSteadyStartTick = 0U;
         if (chargeBalanceSteadyStartTick == 0U)
         {
           chargeBalanceSteadyStartTick = now;
@@ -915,67 +983,44 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
         {
           chargeCurrentOnlyMode = 1U;
           chargeBalanceSteadyStartTick = 0U;
+          chargeActiveSingleBat = 0U;
+          chargeSingleSwitchedOnce = 0U;
         }
         else
         {
           /* 消抖等待期间维持原有充电侧，杜绝 0.0V 零点振荡 */
-          if ((chargeReplyBatteryIndex == 1U) || (chargeReplyBatteryIndex == 2U))
+          if ((chargeActiveSingleBat == 1U) || (chargeActiveSingleBat == 2U))
           {
-            replyBatteryIndex = chargeReplyBatteryIndex;
-            chargeMask = (replyBatteryIndex == 1U) ? 0x01U : 0x02U;
+            replyBatteryIndex = chargeActiveSingleBat;
           }
           else
           {
             replyBatteryIndex = (voltageDiff <= 0.0f) ? 1U : 2U;
-            chargeMask = (replyBatteryIndex == 1U) ? 0x01U : 0x02U;
+            chargeActiveSingleBat = replyBatteryIndex;
           }
+          chargeMask = (replyBatteryIndex == 1U) ? 0x01U : 0x02U;
         }
       }
     }
 
     if (chargeCurrentOnlyMode != 0U)
     {
+      /* 已达成压差平衡进入双充并网状态：锁存维持并联双充 (0x03)，不再因充电电流引起瞬态压差而回退单充 */
       chargeSingleSwitchSteadyStartTick = 0U;
-      /* 已处于双充并网状态：检测压差是否再次扩大超出迟滞退出阈值 (0.30V) */
-      float absDiff = (voltageDiff >= 0.0f) ? voltageDiff : -voltageDiff;
-      if (absDiff >= POWER_CHARGE_BALANCE_EXIT_DIFF)
-      {
-        if (chargeExitSteadyStartTick == 0U)
-        {
-          chargeExitSteadyStartTick = now;
-        }
-
-        /* 压差扩大持续稳定 500ms 消抖（或严重超差 >= 0.60V 瞬时），才迟滞退出双充回退单充 */
-        if (((now - chargeExitSteadyStartTick) >= POWER_BALANCE_DEBOUNCE_MS) ||
-            (absDiff >= (POWER_CHARGE_BALANCE_EXIT_DIFF * 2.0f)))
-        {
-          chargeCurrentOnlyMode = 0U;
-          chargeBalanceSteadyStartTick = 0U;
-          chargeExitSteadyStartTick = 0U;
-          chargeMask = (voltageDiff > 0.0f) ? 0x02U : 0x01U;
-          replyBatteryIndex = (voltageDiff > 0.0f) ? 2U : 1U;
-        }
-        else
-        {
-          /* 退出消抖确认期内：维持并联双充，避免单帧瞬态噪声误跳脱 */
-          chargeMask = 0x03U;
-          replyBatteryIndex = (battery1Voltage <= battery2Voltage) ? 1U : 2U;
-        }
-      }
-      else
-      {
-        chargeExitSteadyStartTick = 0U;
-        chargeMask = 0x03U;
-        replyBatteryIndex = (battery1Voltage <= battery2Voltage) ? 1U : 2U;
-      }
+      chargeBalanceSteadyStartTick = 0U;
+      chargeActiveSingleBat = 0U;
+      chargeSingleSwitchedOnce = 0U;
+      chargeMask = 0x03U;
+      replyBatteryIndex = (battery1Voltage <= battery2Voltage) ? 1U : 2U;
     }
   }
   else if (battery1Present != 0U)
   {
     chargeCurrentOnlyMode = 0U;
     chargeBalanceSteadyStartTick = 0U;
-    chargeExitSteadyStartTick = 0U;
     chargeSingleSwitchSteadyStartTick = 0U;
+    chargeActiveSingleBat = 0U;
+    chargeSingleSwitchedOnce = 0U;
     chargeMask = 0x01U;
     replyBatteryIndex = 1U;
   }
@@ -983,8 +1028,9 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
   {
     chargeCurrentOnlyMode = 0U;
     chargeBalanceSteadyStartTick = 0U;
-    chargeExitSteadyStartTick = 0U;
     chargeSingleSwitchSteadyStartTick = 0U;
+    chargeActiveSingleBat = 0U;
+    chargeSingleSwitchedOnce = 0U;
     chargeMask = 0x02U;
     replyBatteryIndex = 2U;
   }
@@ -992,8 +1038,9 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
   {
     chargeCurrentOnlyMode = 0U;
     chargeBalanceSteadyStartTick = 0U;
-    chargeExitSteadyStartTick = 0U;
     chargeSingleSwitchSteadyStartTick = 0U;
+    chargeActiveSingleBat = 0U;
+    chargeSingleSwitchedOnce = 0U;
   }
 
   /* 统一控制总充 MOS、各路回充与主放电 MOS */
@@ -1003,9 +1050,9 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
       ((replyBatteryIndex != chargeReplyBatteryIndex) ||
        ((now - chargeReplyLastTxTick) >= POWER_CHARGE_REPLY_PERIOD_MS)))
   {
-    chargeReplyLastTxTick = now;
     if (FDCAN_SendChargeReplyToCharger(replyBatteryIndex) == HAL_OK)
     {
+      chargeReplyLastTxTick = now;
       chargeReplyBatteryIndex = replyBatteryIndex;
     }
   }
@@ -1014,8 +1061,9 @@ static void Power_UpdateChargeMode(uint8_t battery1Present, uint8_t battery2Pres
   {
     chargeCurrentOnlyMode = 0U;
     chargeBalanceSteadyStartTick = 0U;
-    chargeExitSteadyStartTick = 0U;
     chargeSingleSwitchSteadyStartTick = 0U;
+    chargeActiveSingleBat = 0U;
+    chargeSingleSwitchedOnce = 0U;
     chargeReplyBatteryIndex = 0U;
     chargeReplyLastTxTick = now;
   }

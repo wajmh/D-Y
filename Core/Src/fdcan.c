@@ -571,18 +571,6 @@ static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
       Error_Handler();
     }
   }
-
-  if (hfdcan->Instance == FDCAN3)
-  {
-    filterConfig.FilterIndex = filterIndex;
-    filterConfig.FilterID1 = FDCAN_CHARGE_MODE_CMD_ID;
-    filterConfig.FilterID2 = 0x1FFFFFFFU; /* 精确匹配 0x0500FF80 充电桩广播握手帧 */
-
-    if (HAL_FDCAN_ConfigFilter(hfdcan, &filterConfig) != HAL_OK)
-    {
-      Error_Handler();
-    }
-  }
 }
 
 static void FDCAN_ConfigRkRxFilters(void)
@@ -612,6 +600,16 @@ static void FDCAN_ConfigRkRxFilters(void)
 
   filterConfig.FilterIndex = 2U;
   filterConfig.FilterID1 = FDCAN_IAP_CMD_ID;
+  filterConfig.FilterID2 = 0x1FFFFFFFU;
+
+  if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* 外部充电桩挂载在 FDCAN2 总线：配置 FilterIndex 3 精确匹配 0x0500FF80 握手广播帧 */
+  filterConfig.FilterIndex = 3U;
+  filterConfig.FilterID1 = FDCAN_CHARGE_MODE_CMD_ID;
   filterConfig.FilterID2 = 0x1FFFFFFFU;
 
   if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filterConfig) != HAL_OK)
@@ -927,30 +925,6 @@ static void FDCAN_PollBatteryRx(FDCAN_HandleTypeDef *hfdcan, uint8_t batteryInde
       return;
     }
 
-    if ((hfdcan->Instance == FDCAN3) &&
-        (rxHeader.IdType == FDCAN_EXTENDED_ID) &&
-        (rxHeader.RxFrameType == FDCAN_DATA_FRAME) &&
-        (rxHeader.Identifier == FDCAN_CHARGE_MODE_CMD_ID))
-    {
-      uint32_t now = HAL_GetTick();
-      if (charger_can_last_rx_tick != 0U)
-      {
-        charger_can_rx_interval_ms = now - charger_can_last_rx_tick;
-      }
-      charger_can_rx_id = rxHeader.Identifier;
-      FDCAN_IncrementDebugCounter(&charger_can_rx_count);
-      charger_can_last_rx_tick = now;
-
-      if ((rk_charge_mode_request != 0U) && (charge_mode_active == 0U))
-      {
-        if (Power_EnterChargeMode() == HAL_OK)
-        {
-          charge_mode_active = 1U;
-          FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_ENTER);
-        }
-      }
-      continue;
-    }
 
     FDCAN_CacheChargeReplyFrame(batteryIndex, &rxHeader, rxData);
     FDCAN_ForwardBatteryFrameToRk(batteryIndex, &rxHeader, rxData);
@@ -1243,6 +1217,31 @@ static void FDCAN_PollRkRx(void)
       return;
     }
 
+    /* 外部充电桩广播握手帧 (0x0500FF80) 在 FDCAN2 总线上接收 */
+    if ((rxHeader.IdType == FDCAN_EXTENDED_ID) &&
+        (rxHeader.RxFrameType == FDCAN_DATA_FRAME) &&
+        (rxHeader.Identifier == FDCAN_CHARGE_MODE_CMD_ID))
+    {
+      uint32_t now = HAL_GetTick();
+      if (charger_can_last_rx_tick != 0U)
+      {
+        charger_can_rx_interval_ms = now - charger_can_last_rx_tick;
+      }
+      charger_can_rx_id = rxHeader.Identifier;
+      FDCAN_IncrementDebugCounter(&charger_can_rx_count);
+      charger_can_last_rx_tick = now;
+
+      if ((rk_charge_mode_request != 0U) && (charge_mode_active == 0U))
+      {
+        if (Power_EnterChargeMode() == HAL_OK)
+        {
+          charge_mode_active = 1U;
+          FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_ENTER);
+        }
+      }
+      continue;
+    }
+
     if (rxHeader.Identifier == FDCAN_RK_CHARGE_MODE_CMD_ID)
     {
       FDCAN_HandleRkChargeModeCommand(&rxHeader, rxData);
@@ -1271,8 +1270,8 @@ HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex)
     return HAL_ERROR;
   }
 
-  /* 快速预检（无锁） */
-  if (fdcan3_busoff_flag != 0U)
+  /* 快速预检（无锁）：外部充电桩挂载在 FDCAN2 总线 */
+  if (fdcan2_busoff_flag != 0U)
   {
     return HAL_BUSY;
   }
@@ -1286,7 +1285,7 @@ HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex)
       continue;
     }
 
-    if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3) == 0U)
+    if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan2) == 0U)
     {
       result = HAL_BUSY;
       break;
@@ -1306,13 +1305,13 @@ HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex)
     /* 临界区保护：原子检查标志与入队 */
     primask = __get_PRIMASK();
     __disable_irq();
-    if (fdcan3_busoff_flag != 0U)
+    if (fdcan2_busoff_flag != 0U)
     {
       __set_PRIMASK(primask);
       return HAL_BUSY;
     }
 
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &txHeader, frame->data) == HAL_OK)
+    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, frame->data) == HAL_OK)
     {
       sentFrameCount++;
     }

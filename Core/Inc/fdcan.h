@@ -117,7 +117,7 @@ void MX_FDCAN3_Init(void);
 
 /* 电池总压物理合理性范围校验 (V)：过滤 BMS 通信单包瞬态 0V 或飞帧 */
 #define FDCAN_BATTERY_VOLTAGE_MIN                10.0f
-#define FDCAN_BATTERY_VOLTAGE_MAX                84.0f
+#define FDCAN_BATTERY_VOLTAGE_MAX                110.0f
 
 /* 小脑声光控制接口协议定义 */
 #define FDCAN_RK_INDICATOR_CMD_ID                0x04600000U
@@ -163,7 +163,7 @@ typedef enum
 /* App 固件版本号定义 (三位版本: Major.Minor.Patch，例如 v1.4.0) */
 #define APP_FW_VERSION_MAJOR                     1U
 #define APP_FW_VERSION_MINOR                     4U
-#define APP_FW_VERSION_PATCH                     2U
+#define APP_FW_VERSION_PATCH                     3U
 
 void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData);
 void FDCAN_IAP_JumpToBootloader(void);
