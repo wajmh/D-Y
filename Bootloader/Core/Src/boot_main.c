@@ -60,14 +60,13 @@ void Boot_Warm_GPIO_Init(uint8_t batMask)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, POWER_DCDC_ON); /* PA7: 12V 导通 (LOW) */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, POWER_DCDC_ON); /* PC4: 24V 导通 (LOW) */
 
-  /* 维持接力电池主放电 MOS 持续导通 */
+  /* 维持接力电池主放电 MOS (PB6，共栅极背对背回充 MOS 同步导通) 持续导通 */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, ((batMask & 0x01U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_11, ((batMask & 0x02U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
 
-  /* 其余危险回路关断 */
+  /* 外设电源 (PC11/PC12) 及其他回路在升级期间保持关断，待热启动回 App 后再执行外设预充 */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7 | GPIO_PIN_9 | GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2 | GPIO_PIN_10 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2 | GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_15, GPIO_PIN_RESET);
 
   /* PC14 蓝灯点亮指示进入 Bootloader 升级模式 */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, GPIO_PIN_SET);

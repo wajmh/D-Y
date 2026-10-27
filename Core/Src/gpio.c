@@ -46,11 +46,14 @@ typedef struct
 
 static PowerBatteryControl_t battery1Control = {POWER_BATTERY_STATE_OFF};
 static PowerBatteryControl_t battery2Control = {POWER_BATTERY_STATE_OFF};
+static PowerBatteryControl_t peripheralControl = {POWER_BATTERY_STATE_OFF};
 static uint8_t dischargeModeEnabled = 0U;
 static PowerWorkMode_t powerWorkMode = POWER_WORK_MODE_DISCHARGE;
 static uint8_t powerPreDischargeBatteryIndex = 0U;
+static uint8_t peripheralPreDischargeOverlapActive = 0U;
 static uint8_t backEmfAbsorbReleased = 0U;
 static uint32_t battery1PreDischargeStartTick = 0U;
+static uint32_t peripheralPreDischargeStartTick = 0U;
 static uint8_t battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 static uint8_t battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 static uint8_t powerBootBeepTriggered = 0U;
@@ -76,6 +79,8 @@ volatile uint8_t bat2_discharge_mos_state = 0U;
 volatile uint8_t bat2_recharge_mos_state = 0U;
 volatile uint8_t bat2_pre_discharge_mos_state = 0U;
 volatile uint8_t peripheral_power_state = 0U;
+volatile uint8_t peripheral_discharge_mos_state = 0U;
+volatile uint8_t peripheral_pre_discharge_mos_state = 0U;
 volatile uint8_t back_emf_absorb_state = 0U;
 volatile uint8_t back_emf_absorb_1_state = 0U;
 volatile uint8_t back_emf_absorb_2_state = 0U;
@@ -91,6 +96,9 @@ static uint8_t Power_IsBatteryBmsMosFresh(uint8_t batteryIndex);
 static void Power_StartBattery1PreDischarge(void);
 static void Power_FinishBattery1PreDischarge(void);
 static void Power_EnableBattery1DischargePath(void);
+static void Power_StartPeripheralPreDischarge(void);
+static void Power_EnablePeripheralDischargePath(void);
+static void Power_FinishPeripheralPreDischarge(void);
 static void Power_TriggerAbnormalDisconnect(void);
 static void Power_ProcessBatteryOverdischarge(uint32_t now);
 
@@ -182,10 +190,11 @@ void MX_GPIO_Init(void)
 /* USER CODE BEGIN 2 */
 void Power_UpdateGpioDebugStates(void)
 {
-  bat_charge_mos_state = (HAL_GPIO_ReadPin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
-  bat1_charge_mos_state = bat_charge_mos_state;
+  /* 硬件变动1：充电 MOS 已取消，放电与回充采用共栅极背对背 MOS（开启放电 MOS 即自动开启回充 MOS） */
+  bat_charge_mos_state = 0U;
+  bat1_charge_mos_state = 0U;
   bat1_discharge_mos_state = (HAL_GPIO_ReadPin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
-  bat1_recharge_mos_state = (HAL_GPIO_ReadPin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  bat1_recharge_mos_state = bat1_discharge_mos_state;
   bat1_pre_discharge_mos_state = (HAL_GPIO_ReadPin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
 
   bat2_charge_mos_state = 0U;
@@ -193,7 +202,10 @@ void Power_UpdateGpioDebugStates(void)
   bat2_recharge_mos_state = 0U;
   bat2_pre_discharge_mos_state = 0U;
 
-  peripheral_power_state = (HAL_GPIO_ReadPin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  /* 硬件变动2：外设总电源采用 PC11 (主放电开关 MOS) + PC12 (预放电 MOS) */
+  peripheral_discharge_mos_state = (HAL_GPIO_ReadPin(PERIPHERAL_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  peripheral_pre_discharge_mos_state = (HAL_GPIO_ReadPin(PERIPHERAL_PRE_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_PRE_DISCHARGE_MOS_Pin) == POWER_SWITCH_ON) ? 1U : 0U;
+  peripheral_power_state = peripheral_discharge_mos_state;
   dcdc_12v_state = (HAL_GPIO_ReadPin(DCDC_EN_12V_GPIO_Port, DCDC_EN_12V_Pin) == POWER_DCDC_ON) ? 1U : 0U;
   dcdc_24v_state = (HAL_GPIO_ReadPin(DCDC_EN_24V_GPIO_Port, DCDC_EN_24V_Pin) == POWER_DCDC_ON) ? 1U : 0U;
   back_emf_absorb_2_state = (((htim8.Instance->BDTR & TIM_BDTR_MOE) != 0U) &&
@@ -243,14 +255,13 @@ uint8_t Power_IsEmergencyStopActive(void)
 
 void Power_AllMosOff(void)
 {
-  HAL_GPIO_WritePin(BAT_CHARGE_MOS_GPIO_Port, BAT_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  /* 关闭 BAT1 主放电 (背对背回充同步关断) 与预放电 MOS */
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
 
-  HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  /* 关闭外设总电源主放电开关 MOS (PC11) 与预放电 MOS (PC12) */
+  HAL_GPIO_WritePin(PERIPHERAL_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(PERIPHERAL_PRE_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
 
   /* 反电势吸收泄放关闭：禁用 TIM8 主输出 (MOE) 并将占空比置 0，两路输出硬件拉低至 GND */
   __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
@@ -261,12 +272,13 @@ void Power_AllMosOff(void)
   backEmfAbsorbReleased = 0U;
 
   powerPreDischargeBatteryIndex = 0U;
+  peripheralPreDischargeOverlapActive = 0U;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  peripheralControl.state = POWER_BATTERY_STATE_OFF;
   vbusLowVoltageStartTick = 0U;
   battery1AbnormalDisconnected = 0U;
   vbusLowVoltageDetected = 0U;
-  HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
   Power_SetDcdc12V(0U);
   Power_SetDcdc24V(0U);
 }
@@ -276,6 +288,7 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
   if (overdischargeLatched != 0U)
   {
     battery1Control.state = POWER_BATTERY_STATE_OFF;
+    peripheralControl.state = POWER_BATTERY_STATE_OFF;
     Power_AllMosOff();
     return HAL_ERROR;
   }
@@ -287,25 +300,23 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
   vbusLowVoltageStartTick = 0U;
   battery1AbnormalDisconnected = 0U;
   vbusLowVoltageDetected = 0U;
-
-  /* 单电池版本：电池 2 硬件未接入，彻底关闭电池 2 所有 MOS */
-  HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   battery2Control.state = POWER_BATTERY_STATE_OFF;
 
-  /* 立即开通外设供电，确保小脑/主控及辅助设备上电 */
-  HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
+  /* 外设总电源初始处于关断态，待 BAT1 预充完成 (600ms) 或热启动接管后再执行外设预放电软启动 */
+  HAL_GPIO_WritePin(PERIPHERAL_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(PERIPHERAL_PRE_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  peripheralControl.state = POWER_BATTERY_STATE_OFF;
+  peripheralPreDischargeOverlapActive = 0U;
 
   if (g_isHotBoot != 0U)
   {
-    /* 热接力模式：跳过关断与 400ms 预充，直接接管当前已导通的放电状态 */
+    /* 热接力模式：BAT1 跳过关断与 400ms 预充，直接接管当前已导通的放电状态；
+     * 外设电源在 Power_ModeTask 中立即启动 PC12 (400ms 预充) -> PC11 (主放电) -> 200ms 重叠关断 PC12 */
     if ((g_hotBootBatMask & 0x01U) != 0U)
     {
       battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
+      powerPreDischargeBatteryIndex = 0U;
       HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-      HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
     }
     else
     {
@@ -467,28 +478,50 @@ void Power_DischargeModeTask(void)
       vbusLowVoltageStartTick = 0U;
     }
 
-    /* 处于放电状态时，持续确保动力放电 MOS、回充 MOS 和外设供电导通 */
+    /* 处于放电状态时，持续确保动力主放电 MOS (共栅极背对背回充 MOS 同步导通) 与 12V/24V DCDC 导通 */
     HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-    HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
-    HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
     Power_SetDcdc12V(1U);
     Power_SetDcdc24V(1U);
 
-    /* 开启主放电 MOS 后延迟 200ms 关闭预充 MOS，实现平滑重叠导通 */
+    /* 开启 BAT1 主放电 MOS 后延迟 200ms 关闭 BAT1 预充 MOS (PB9)，实现平滑重叠导通 */
     if (powerPreDischargeBatteryIndex == 1U)
     {
-      if ((HAL_GetTick() - battery1PreDischargeStartTick) >= (POWER_PRE_DISCHARGE_DELAY_MS + POWER_PRE_DISCHARGE_OVERLAP_MS))
+      if ((now - battery1PreDischargeStartTick) >= (POWER_PRE_DISCHARGE_DELAY_MS + POWER_PRE_DISCHARGE_OVERLAP_MS))
       {
         Power_FinishBattery1PreDischarge();
       }
     }
-  }
 
-  /* 电池 2 恒为关闭状态 */
-  HAL_GPIO_WritePin(BAT2_CHARGE_MOS_GPIO_Port, BAT2_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_DISCHARGE_MOS_GPIO_Port, BAT2_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_RECHARGE_MOS_GPIO_Port, BAT2_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT2_PRE_DISCHARGE_MOS_GPIO_Port, BAT2_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+    /* 当 BAT1 预充及 200ms 重叠期全部结束后 (或热启动直接进入 DISCHARGE 后)，执行外设总电源预充状态机：
+     * 1. 开启外设预放电 MOS (PC12) 持续 400ms；
+     * 2. 闭合外设主放电开关 MOS (PC11)，保持 PC12 重叠导通 200ms 后关断 PC12。 */
+    if (powerPreDischargeBatteryIndex == 0U)
+    {
+      if (peripheralControl.state == POWER_BATTERY_STATE_OFF)
+      {
+        Power_StartPeripheralPreDischarge();
+      }
+      else if (peripheralControl.state == POWER_BATTERY_STATE_PRE_DISCHARGE)
+      {
+        if ((now - peripheralPreDischargeStartTick) >= PERIPHERAL_PRE_DISCHARGE_DELAY_MS)
+        {
+          Power_EnablePeripheralDischargePath();
+        }
+      }
+      else /* POWER_BATTERY_STATE_DISCHARGE */
+      {
+        HAL_GPIO_WritePin(PERIPHERAL_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+        if (peripheralPreDischargeOverlapActive != 0U)
+        {
+          if ((now - peripheralPreDischargeStartTick) >=
+              (PERIPHERAL_PRE_DISCHARGE_DELAY_MS + PERIPHERAL_PRE_DISCHARGE_OVERLAP_MS))
+          {
+            Power_FinishPeripheralPreDischarge();
+          }
+        }
+      }
+    }
+  }
 }
 
 void Power_ExitDischargeMode(void)
@@ -497,6 +530,7 @@ void Power_ExitDischargeMode(void)
   powerWorkMode = POWER_WORK_MODE_DISCHARGE;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
   battery2Control.state = POWER_BATTERY_STATE_OFF;
+  peripheralControl.state = POWER_BATTERY_STATE_OFF;
   battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
   battery2AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
   vbusLowVoltageStartTick = 0U;
@@ -759,11 +793,11 @@ static void Power_ProcessBatteryOverdischarge(uint32_t now)
 
 static void Power_TriggerAbnormalDisconnect(void)
 {
-  /* 确认异常断开：切断主放电、回充、预充 MOS，并关断 12V/24V DCDC 与外设供电 */
+  /* 确认异常断开：切断 BAT1 主放电/预充 MOS、外设主放电/预充 MOS，并关断 12V/24V DCDC */
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(PERIPHERAL_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(PERIPHERAL_PRE_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   Power_SetDcdc12V(0U);
   Power_SetDcdc24V(0U);
 
@@ -776,7 +810,9 @@ static void Power_TriggerAbnormalDisconnect(void)
   backEmfAbsorbReleased = 0U;
 
   powerPreDischargeBatteryIndex = 0U;
+  peripheralPreDischargeOverlapActive = 0U;
   battery1Control.state = POWER_BATTERY_STATE_OFF;
+  peripheralControl.state = POWER_BATTERY_STATE_OFF;
   battery1AbnormalDisconnected = 1U;
   battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
   vbusLowVoltageStartTick = 0U;
@@ -790,15 +826,16 @@ static void Power_TriggerAbnormalDisconnect(void)
 
 static void Power_StartBattery1PreDischarge(void)
 {
-  HAL_GPIO_WritePin(BAT1_CHARGE_MOS_GPIO_Port, BAT1_CHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_ON);
+  HAL_GPIO_WritePin(PERIPHERAL_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(PERIPHERAL_PRE_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
   HAL_GPIO_WritePin(BAT1_PRE_DISCHARGE_MOS_GPIO_Port, BAT1_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
 
   battery1PreDischargeStartTick = HAL_GetTick();
   battery1Control.state = POWER_BATTERY_STATE_PRE_DISCHARGE;
   powerPreDischargeBatteryIndex = 1U;
+  peripheralControl.state = POWER_BATTERY_STATE_OFF;
+  peripheralPreDischargeOverlapActive = 0U;
 }
 
 static void Power_FinishBattery1PreDischarge(void)
@@ -809,12 +846,34 @@ static void Power_FinishBattery1PreDischarge(void)
 
 static void Power_EnableBattery1DischargePath(void)
 {
+  /* 开启 BAT1 主放电 MOS (PB6)，共栅极背对背回充 MOS 同步导通 */
   HAL_GPIO_WritePin(BAT1_DISCHARGE_MOS_GPIO_Port, BAT1_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
-  HAL_GPIO_WritePin(BAT1_RECHARGE_MOS_GPIO_Port, BAT1_RECHARGE_MOS_Pin, POWER_SWITCH_ON);
   Power_SetDcdc12V(1U);
   Power_SetDcdc24V(1U);
   Power_TriggerBootBeep();
   battery1Control.state = POWER_BATTERY_STATE_DISCHARGE;
+}
+
+static void Power_StartPeripheralPreDischarge(void)
+{
+  HAL_GPIO_WritePin(PERIPHERAL_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  HAL_GPIO_WritePin(PERIPHERAL_PRE_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+
+  peripheralPreDischargeStartTick = HAL_GetTick();
+  peripheralControl.state = POWER_BATTERY_STATE_PRE_DISCHARGE;
+  peripheralPreDischargeOverlapActive = 1U;
+}
+
+static void Power_EnablePeripheralDischargePath(void)
+{
+  HAL_GPIO_WritePin(PERIPHERAL_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_DISCHARGE_MOS_Pin, POWER_SWITCH_ON);
+  peripheralControl.state = POWER_BATTERY_STATE_DISCHARGE;
+}
+
+static void Power_FinishPeripheralPreDischarge(void)
+{
+  HAL_GPIO_WritePin(PERIPHERAL_PRE_DISCHARGE_MOS_GPIO_Port, PERIPHERAL_PRE_DISCHARGE_MOS_Pin, POWER_SWITCH_OFF);
+  peripheralPreDischargeOverlapActive = 0U;
 }
 
 void Power_SetDcdc12V(uint8_t enable)
@@ -1041,15 +1100,18 @@ void Power_UpdateBoardLeds(void)
     /* 泄放动作激活：高频爆闪 (50ms 翻转) 提示大功率泄放中 */
     led3State = (((now / 50U) % 2U) == 0U) ? BOARD_LED_ON : BOARD_LED_OFF;
   }
-  else if (battery1Control.state == POWER_BATTERY_STATE_PRE_DISCHARGE)
+  else if ((battery1Control.state == POWER_BATTERY_STATE_PRE_DISCHARGE) ||
+           (powerPreDischargeBatteryIndex != 0U) ||
+           (peripheralControl.state == POWER_BATTERY_STATE_PRE_DISCHARGE))
   {
-    /* 上电预充中：2Hz 闪烁 (250ms 翻转) 提示正在预充缓启动 */
+    /* 上电预充中 (BAT1 预充/重叠期或外设总电源预充)：2Hz 闪烁 (250ms 翻转) 提示正在预充缓启动 */
     led3State = (((now / 250U) % 2U) == 0U) ? BOARD_LED_ON : BOARD_LED_OFF;
   }
   else if ((battery1Control.state == POWER_BATTERY_STATE_DISCHARGE) &&
+           (peripheralControl.state == POWER_BATTERY_STATE_DISCHARGE) &&
            (dcdc_24v_state != 0U))
   {
-    /* 动力输出就绪 (主放电 MOS 导通且 24V DCDC 已打开)：常亮 */
+    /* 动力与外设输出全部就绪 (主放电 MOS、外设放电 MOS 导通且 24V DCDC 已打开)：常亮 */
     led3State = BOARD_LED_ON;
   }
   else
@@ -1130,24 +1192,22 @@ void Power_HotBootGpioInit(uint8_t batMask)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /* 1. 先设置输出数据寄存器 (ODR/BSRR)，确保引脚配置为输出时不出现任何电平跌落 */
-  /* GPIOC: PC4 (24V DCDC, 低使能), PC2 (绿灯), PC11 (Bat2主放电, 单电池版本强制关) */
+  /* GPIOC: PC4 (24V DCDC, 低使能), PC2 (绿灯), PC11/PC12 (外设主放电/预放电 MOS, 初始拉低待预充) */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, POWER_DCDC_ON); /* 保持 24V DCDC 导通 (Active Low) */
 #if defined(POWER_STATUS_LED_FLOWING_TEST_ENABLE) && (POWER_STATUS_LED_FLOWING_TEST_ENABLE != 0U)
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_RESET);  /* IAP 流水灯模式：热启动初始不常亮绿灯 */
 #else
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET);    /* 恢复绿灯指示正常工作态 */
 #endif
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_11, POWER_SWITCH_OFF); /* 电池 2 彻底关断 */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_RESET);
 
-  /* GPIOA: PA7 (12V DCDC, 低使能), PA5 (外设供电, 高开) */
+  /* GPIOA: PA7 (12V DCDC, 低使能), PA5 (已弃用旧外设引脚, 保持低电平) */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, POWER_DCDC_ON); /* 保持 12V DCDC 持续不断电 (Active Low) */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, POWER_SWITCH_ON);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 
-  /* GPIOB: PB6 (Bat1主放电, 高开), PB7 (Bat1回充, 高开), 板载 LED2/LED3 置默认电平, 其余关 */
+  /* GPIOB: PB6 (Bat1主放电, 与回充背对背共栅极, 高开), 板载 LED2/LED3 及已弃用引脚 PB7/PB10 置低电平 */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, ((batMask & 0x01U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, ((batMask & 0x01U) != 0U) ? POWER_SWITCH_ON : POWER_SWITCH_OFF);
-  HAL_GPIO_WritePin(GPIOB, LED2_Pin | LED3_Pin | GPIO_PIN_9 | GPIO_PIN_10, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, LED2_Pin | LED3_Pin | GPIO_PIN_7 | GPIO_PIN_9 | GPIO_PIN_10, GPIO_PIN_RESET);
 
   /* 2. 配置引脚为推挽输出模式 */
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;

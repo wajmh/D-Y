@@ -32,33 +32,39 @@ extern "C" {
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN Private defines */
-/* ==================== 电池包1 MOS 控制引脚 ==================== */
-#define BAT1_DISCHARGE_MOS_GPIO_Port       GPIOB
-#define BAT1_DISCHARGE_MOS_Pin             GPIO_PIN_6   /* PB6: 主放电 MOS */
-#define BAT1_RECHARGE_MOS_GPIO_Port        GPIOB
-#define BAT1_RECHARGE_MOS_Pin              GPIO_PIN_7   /* PB7: 回充 MOS */
-#define BAT1_PRE_DISCHARGE_MOS_GPIO_Port   GPIOB
-#define BAT1_PRE_DISCHARGE_MOS_Pin         GPIO_PIN_9   /* PB9: 预放电 MOS */
+/* ==================== 电池包1 MOS 控制引脚 ====================
+ * 硬件说明：
+ * 1. 已取消独立的 BAT1 回充 MOS (原 PB7) 和充电 MOS (原 PB10)，直接通过充电器连接充电；
+ * 2. 吸收反向电动势的回充 MOS 与主放电 MOS 采用一组共栅极背对背 MOS，开启主放电 MOS (PB6) 即自动开启回充 MOS。
+ */
+#define BAT1_DISCHARGE_MOS_GPIO_Port           GPIOB
+#define BAT1_DISCHARGE_MOS_Pin                 GPIO_PIN_6   /* PB6: BAT1 主放电 MOS (与回充 MOS 共栅极背对背) */
+#define BAT1_PRE_DISCHARGE_MOS_GPIO_Port       GPIOB
+#define BAT1_PRE_DISCHARGE_MOS_Pin             GPIO_PIN_9   /* PB9: BAT1 预放电 MOS */
 
-/* ==================== 电池包2 MOS 控制引脚 ==================== */
-#define BAT2_DISCHARGE_MOS_GPIO_Port       GPIOC
-#define BAT2_DISCHARGE_MOS_Pin             GPIO_PIN_11  /* PC11: 主放电 MOS */
-#define BAT2_RECHARGE_MOS_GPIO_Port        GPIOC
-#define BAT2_RECHARGE_MOS_Pin              GPIO_PIN_10  /* PC10: 回充 MOS */
-#define BAT2_PRE_DISCHARGE_MOS_GPIO_Port   GPIOC
-#define BAT2_PRE_DISCHARGE_MOS_Pin         GPIO_PIN_12  /* PC12: 预放电 MOS */
+/* ==================== 外设总电源 MOS 控制引脚 ====================
+ * 硬件说明：
+ * 舍弃原外设供电引脚 (PA5)，复用原 BAT2 主放电 MOS (PC11) 与预放电 MOS (PC12) 引脚，
+ * 构成带预放电缓启动的外设总电源控制电路。
+ */
+#define PERIPHERAL_DISCHARGE_MOS_GPIO_Port     GPIOC
+#define PERIPHERAL_DISCHARGE_MOS_Pin           GPIO_PIN_11  /* PC11: 外设总电源主放电开关 MOS (原 BAT2 主放电引脚) */
+#define PERIPHERAL_PRE_DISCHARGE_MOS_GPIO_Port GPIOC
+#define PERIPHERAL_PRE_DISCHARGE_MOS_Pin       GPIO_PIN_12  /* PC12: 外设总电源预放电 MOS (原 BAT2 预放电引脚) */
 
-/* ==================== 充电与外设供电控制 ==================== */
-#define BAT_CHARGE_MOS_GPIO_Port           GPIOB
-#define BAT_CHARGE_MOS_Pin                 GPIO_PIN_10  /* PB10: 单路总充电控制 MOS (直通 VBUS) */
-#define PERIPHERAL_POWER_GPIO_Port         GPIOA
-#define PERIPHERAL_POWER_Pin               GPIO_PIN_5   /* PA5: 外设供电 MOS */
+/* 兼容旧外设供电宏名（指向外设总电源主放电开关 MOS PC11） */
+#define PERIPHERAL_POWER_GPIO_Port             PERIPHERAL_DISCHARGE_MOS_GPIO_Port
+#define PERIPHERAL_POWER_Pin                   PERIPHERAL_DISCHARGE_MOS_Pin
 
-/* 兼容旧宏定义 */
-#define BAT1_CHARGE_MOS_GPIO_Port          BAT_CHARGE_MOS_GPIO_Port
-#define BAT1_CHARGE_MOS_Pin                BAT_CHARGE_MOS_Pin
-#define BAT2_CHARGE_MOS_GPIO_Port          BAT_CHARGE_MOS_GPIO_Port
-#define BAT2_CHARGE_MOS_Pin                BAT_CHARGE_MOS_Pin
+/* ==================== 已弃用历史引脚定义（保持安全低电平，不再驱动） ==================== */
+#define LEGACY_UNUSED_PA5_GPIO_Port            GPIOA
+#define LEGACY_UNUSED_PA5_Pin                  GPIO_PIN_5   /* 原 PA5 外设供电引脚 (已停用) */
+#define LEGACY_UNUSED_PB7_GPIO_Port            GPIOB
+#define LEGACY_UNUSED_PB7_Pin                  GPIO_PIN_7   /* 原 PB7 BAT1 回充 MOS 引脚 (已取消) */
+#define LEGACY_UNUSED_PB10_GPIO_Port           GPIOB
+#define LEGACY_UNUSED_PB10_Pin                 GPIO_PIN_10  /* 原 PB10 充电控制 MOS 引脚 (已取消) */
+#define LEGACY_UNUSED_PC10_GPIO_Port           GPIOC
+#define LEGACY_UNUSED_PC10_Pin                 GPIO_PIN_10  /* 原 PC10 BAT2 回充 MOS 引脚 (已停用) */
 
 /* ==================== 反电势吸收保护 (TIM8 互补 PWM) ==================== */
 #define BACK_EMF_ABSORB_CH2_GPIO_Port      GPIOC
@@ -116,11 +122,14 @@ extern "C" {
 #define POWER_ESTOP_ACTIVE_STATE           GPIO_PIN_RESET
 #define POWER_ESTOP_DEBOUNCE_MS            30U
 
-/* 预放电等待时间，单位 ms */
+/* 电池包1 预放电等待时间与重叠导通时间，单位 ms */
 #define POWER_PRE_DISCHARGE_DELAY_MS       400U
-/* 主放电 MOS 打开后预充 MOS 延时关闭时间（重叠导通缓冲），单位 ms */
 #define POWER_PRE_DISCHARGE_OVERLAP_MS     200U
 #define POWER_PRE_DISCHARGE_DELAY          POWER_PRE_DISCHARGE_OVERLAP_MS
+
+/* 外设总电源 预放电等待时间与重叠导通时间，单位 ms */
+#define PERIPHERAL_PRE_DISCHARGE_DELAY_MS   400U
+#define PERIPHERAL_PRE_DISCHARGE_OVERLAP_MS 200U
 /* CAN 超过该时间未收到状态帧时，认为电池通信掉线 */
 #define POWER_BATTERY_CAN_TIMEOUT_MS       2000U
 /* 上电开机宽限期 (ms)：上电初始 4000ms 内等待 BMS 首包到达，避免刚上电瞬态误报警 */
@@ -204,6 +213,8 @@ extern volatile uint8_t bat2_discharge_mos_state;
 extern volatile uint8_t bat2_recharge_mos_state;
 extern volatile uint8_t bat2_pre_discharge_mos_state;
 extern volatile uint8_t peripheral_power_state;
+extern volatile uint8_t peripheral_discharge_mos_state;
+extern volatile uint8_t peripheral_pre_discharge_mos_state;
 extern volatile uint8_t back_emf_absorb_state;
 extern volatile uint8_t back_emf_absorb_1_state;
 extern volatile uint8_t back_emf_absorb_2_state;
