@@ -65,6 +65,8 @@ static uint8_t battery1AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 static uint8_t battery2AlarmStatus = BATTERY_ALARM_STATUS_NORMAL;
 static uint8_t powerBootBeepTriggered = 0U;
 static uint32_t powerBootBeepStartTick = 0U;
+static uint32_t vbusLowVoltageStartTick = 0U;
+static uint8_t vbusLowVoltageDetected = 0U;
 
 volatile uint8_t bat_charge_mos_state = 0U;
 volatile uint8_t bat1_charge_mos_state = 0U;
@@ -108,6 +110,7 @@ static void Power_UpdateBattery2Path(uint8_t present);
 static void Power_DisableBattery1Path(void);
 static void Power_DisableBattery2Path(void);
 static void Power_UpdateRechargeMos(uint8_t battery1Ready, uint8_t battery2Ready);
+static void Power_TriggerAbnormalDisconnect(void);
 
 static uint8_t g_isHotBoot = 0U;
 static uint8_t g_hotBootBatMask = 0U;
@@ -303,6 +306,8 @@ void Power_AllMosOff(void)
   chargeSingleSwitchSteadyStartTick = 0U;
   chargeActiveSingleBat = 0U;
   chargeSingleSwitchedOnce = 0U;
+  vbusLowVoltageStartTick = 0U;
+  vbusLowVoltageDetected = 0U;
   HAL_GPIO_WritePin(PERIPHERAL_POWER_GPIO_Port, PERIPHERAL_POWER_Pin, POWER_SWITCH_OFF);
   Power_SetDcdc12V(0U);
   Power_SetDcdc24V(0U);
@@ -318,6 +323,8 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
   chargeSingleSwitchedOnce = 0U;
   chargeReplyBatteryIndex = 0U;
   chargeReplyLastTxTick = HAL_GetTick();
+  vbusLowVoltageStartTick = 0U;
+  vbusLowVoltageDetected = 0U;
 
   if (g_isHotBoot != 0U)
   {
@@ -345,6 +352,13 @@ HAL_StatusTypeDef Power_EnterDischargeMode(void)
     Power_SetDcdc12V(1U);
     Power_SetDcdc24V(1U);
     g_isHotBoot = 0U; /* 接力完成，恢复常规状态机管理 */
+
+    /* 确保 ADC2 DMA 完成首次转换并填满 5 点中值滤波窗口，防止热启动首帧 VBUS=0V 误触发欠压断开 */
+    HAL_Delay(1U);
+    for (uint8_t i = 0U; i < 5U; i++)
+    {
+      ADC2_UpdateVbusVoltage();
+    }
   }
   else
   {
@@ -417,6 +431,50 @@ void Power_DischargeModeTask(void)
   if (dischargeModeEnabled == 0U)
   {
     return;
+  }
+
+  /*
+   * 放电态母线异常断开欠压监测（VBUS < 30V 持续 10ms 或消抖期内恢复）：
+   * 当至少有一路电池处于主放电态 (POWER_BATTERY_STATE_DISCHARGE) 时，实时监测 VBUS 电压；
+   * 若持续 10ms 低于 30V 或在 10ms 消抖期内回弹（接触不良/开关快速通断），
+   * 立即切断双路全部功率 MOS、DCDC 与外设供电，将双电池状态机回退至 OFF，
+   * 后续在 CanAlive && BmsAllowed 满足时按预充互斥顺序重新执行 400ms 预放电软启动，防止无预充硬短路。
+   */
+  if ((battery1Control.state == POWER_BATTERY_STATE_DISCHARGE) ||
+      (battery2Control.state == POWER_BATTERY_STATE_DISCHARGE))
+  {
+    float currentVbus = ADC_GetVbusVoltage();
+    uint32_t now = HAL_GetTick();
+
+    if (currentVbus < POWER_VBUS_UNDER_VOLTAGE_THRESHOLD)
+    {
+      if (vbusLowVoltageDetected == 0U)
+      {
+        vbusLowVoltageStartTick = now;
+        vbusLowVoltageDetected = 1U; /* 标记检测到欠压 */
+      }
+      else if ((now - vbusLowVoltageStartTick) >= POWER_VBUS_DISCONNECT_DEBOUNCE_MS)
+      {
+        /* 欠压持续达到消抖时间：立即执行异常断开关断保护并回退至 OFF 状态 */
+        Power_TriggerAbnormalDisconnect();
+        return;
+      }
+    }
+    else if (vbusLowVoltageDetected != 0U)
+    {
+      /* 曾经检测到欠压但在消抖期内 VBUS 恢复：说明电池接触不良合闸，立即强制切断并重新预充防硬短路 */
+      Power_TriggerAbnormalDisconnect();
+      return;
+    }
+    else
+    {
+      vbusLowVoltageStartTick = 0U;
+    }
+  }
+  else
+  {
+    vbusLowVoltageStartTick = 0U;
+    vbusLowVoltageDetected = 0U;
   }
 
   bat1BmsProhibited = Power_IsBatteryBmsDischargeProhibited(1U);
@@ -531,6 +589,8 @@ void Power_ExitDischargeMode(void)
   chargeSingleSwitchedOnce = 0U;
   chargeReplyBatteryIndex = 0U;
   chargeReplyLastTxTick = HAL_GetTick();
+  vbusLowVoltageStartTick = 0U;
+  vbusLowVoltageDetected = 0U;
   Power_AllMosOff();
 }
 
@@ -760,6 +820,8 @@ HAL_StatusTypeDef Power_EnterChargeMode(void)
   chargeSingleSwitchedOnce = 0U;
   chargeReplyBatteryIndex = 0U;
   chargeReplyLastTxTick = HAL_GetTick() - POWER_CHARGE_REPLY_PERIOD_MS;
+  vbusLowVoltageStartTick = 0U;
+  vbusLowVoltageDetected = 0U;
 
   /* 3. 立即执行模式任务，由 Power_UpdateChargeMode 原子化协同配置目标 MOS */
   Power_ModeTask();
@@ -784,6 +846,8 @@ void Power_ExitChargeMode(void)
     chargeSingleSwitchedOnce = 0U;
     chargeReplyBatteryIndex = 0U;
     chargeReplyLastTxTick = HAL_GetTick();
+    vbusLowVoltageStartTick = 0U;
+    vbusLowVoltageDetected = 0U;
 
     Power_ModeTask();
   }
@@ -1391,6 +1455,14 @@ static void Power_UpdatePeripheralPower(uint8_t battery1Present, uint8_t battery
 
 
 
+
+static void Power_TriggerAbnormalDisconnect(void)
+{
+  /* 确认异常断开：切断双路全部放电、回充、预充、总充电 MOS，并关断 12V/24V DCDC、外设供电与泄放 */
+  Power_AllMosOff();
+  battery1AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+  battery2AlarmStatus = BATTERY_ALARM_STATUS_REMOVED;
+}
 
 static void Power_StartBattery1PreDischarge(void)
 {

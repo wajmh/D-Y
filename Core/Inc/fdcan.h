@@ -117,7 +117,7 @@ void MX_FDCAN3_Init(void);
 
 /* 电池总压物理合理性范围校验 (V)：过滤 BMS 通信单包瞬态 0V 或飞帧 */
 #define FDCAN_BATTERY_VOLTAGE_MIN                10.0f
-#define FDCAN_BATTERY_VOLTAGE_MAX                110.0f
+#define FDCAN_BATTERY_VOLTAGE_MAX                600.0f // 给一个达不到的值，采用这种方式取消上限校验
 
 /* 小脑声光控制接口协议定义 */
 #define FDCAN_RK_INDICATOR_CMD_ID                0x04600000U

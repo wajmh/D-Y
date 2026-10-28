@@ -134,6 +134,10 @@ extern "C" {
 #define POWER_VBUS_RELEASE_CLOSE_VOLTAGE   999.0f
 #define POWER_VBUS_RELEASE_PWM_DUTY        50U   /* PWM 占空比 50% */
 
+/* 母线异常断开欠压检测阈值与消抖时间 */
+#define POWER_VBUS_UNDER_VOLTAGE_THRESHOLD 30.0f /* 放电态母线电压低于 30V 判定为电池异常断开/失电 */
+#define POWER_VBUS_DISCONNECT_DEBOUNCE_MS  10U   /* 持续 10ms 消抖滤除电机瞬态扰动 */
+
 /* ==================== 电池在线与告警状态定义 (V1.5 极简3态) ==================== */
 #define BATTERY_ALARM_STATUS_NORMAL                  0x00U /* 正常就绪 (CAN在线且BMS明确允许放电) */
 #define BATTERY_ALARM_STATUS_OFFLINE                 0x01U /* 离线/未连接 (CAN通信掉线，合并原掉线与拔出) */
