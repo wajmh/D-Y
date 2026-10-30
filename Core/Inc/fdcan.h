@@ -142,7 +142,7 @@ typedef enum
 /* App 固件版本号定义 (三位版本: Major.Minor.Patch，例如 v1.4.0) */
 #define APP_FW_VERSION_MAJOR                     1U
 #define APP_FW_VERSION_MINOR                     4U
-#define APP_FW_VERSION_PATCH                     4U
+#define APP_FW_VERSION_PATCH                     5U
 
 void FDCAN_HandleIapCommand(const FDCAN_RxHeaderTypeDef *rxHeader, const uint8_t *rxData);
 void FDCAN_IAP_JumpToBootloader(void);
