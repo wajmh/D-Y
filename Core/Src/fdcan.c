@@ -60,6 +60,8 @@ static uint32_t batteryCanLastTxTick = 0U;
 static uint32_t busTelemetryReportLastTxTick = 0U;
 static uint32_t batteryAlarmReportLastTxTick = 0U;
 static uint32_t estopReportLastTxTick = 0U;
+static uint32_t chargeModeReportLastTxTick = 0U;
+static uint8_t chargeModeStatusPending = 0U;
 
 typedef struct
 {
@@ -499,23 +501,39 @@ HAL_StatusTypeDef FDCAN_SendEmergencyStopReportToRk(uint8_t estopActive)
   return FDCAN_SendCurrentReport(FDCAN_ESTOP_REPORT_ID, estopData);
 }
 
-static void FDCAN_SendChargeModeStatusToRk(uint8_t status)
+uint8_t FDCAN_GetChargeModeStatus(void)
+{
+  if (charge_mode_active != 0U)
+  {
+    return FDCAN_CHARGE_MODE_ENTER;
+  }
+
+  if (rk_charge_mode_request != 0U)
+  {
+    return FDCAN_CHARGE_MODE_WAIT_CHARGER;
+  }
+
+  return FDCAN_CHARGE_MODE_EXIT;
+}
+
+static HAL_StatusTypeDef FDCAN_SendChargeModeStatusToRk(uint8_t status)
 {
   FDCAN_TxHeaderTypeDef txHeader;
   uint8_t statusData[1];
   uint32_t primask;
+  HAL_StatusTypeDef halStatus;
 
   statusData[0] = status;
 
   /* 快速预检（无锁） */
   if (fdcan2_busoff_flag != 0U)
   {
-    return;
+    return HAL_BUSY;
   }
 
   if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan2) == 0U)
   {
-    return;
+    return HAL_BUSY;
   }
 
   /* 配置 txHeader（不需要在临界区内） */
@@ -535,10 +553,12 @@ static void FDCAN_SendChargeModeStatusToRk(uint8_t status)
   if (fdcan2_busoff_flag != 0U)
   {
     __set_PRIMASK(primask);
-    return;
+    return HAL_BUSY;
   }
-  (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, statusData);
+  halStatus = HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &txHeader, statusData);
   __set_PRIMASK(primask);
+
+  return halStatus;
 }
 
 static void FDCAN_ConfigBatteryRxFilters(FDCAN_HandleTypeDef *hfdcan)
@@ -957,10 +977,7 @@ static void FDCAN_HandleRkChargeModeCommand(const FDCAN_RxHeaderTypeDef *rxHeade
   if (rxData[0] == FDCAN_CHARGE_MODE_ENTER)
   {
     rk_charge_mode_request = 1U;
-    if (charge_mode_active != 0U)
-    {
-      FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_ENTER);
-    }
+    chargeModeStatusPending = 1U;
     return;
   }
 
@@ -969,7 +986,7 @@ static void FDCAN_HandleRkChargeModeCommand(const FDCAN_RxHeaderTypeDef *rxHeade
     rk_charge_mode_request = 0U;
     charge_mode_active = 0U;
     Power_ExitChargeMode();
-    FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_EXIT);
+    chargeModeStatusPending = 1U;
   }
 }
 
@@ -1236,7 +1253,7 @@ static void FDCAN_PollRkRx(void)
         if (Power_EnterChargeMode() == HAL_OK)
         {
           charge_mode_active = 1U;
-          FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_ENTER);
+          chargeModeStatusPending = 1U;
         }
       }
       continue;
@@ -1434,6 +1451,8 @@ void FDCAN_BatteryCanStart(void)
   busTelemetryReportLastTxTick = HAL_GetTick();
   batteryAlarmReportLastTxTick = HAL_GetTick() - FDCAN_BATTERY_ALARM_REPORT_PERIOD_MS;
   estopReportLastTxTick = HAL_GetTick() - FDCAN_ESTOP_NORMAL_REPORT_PERIOD_MS;
+  chargeModeReportLastTxTick = HAL_GetTick() - FDCAN_RK_CHARGE_MODE_REPORT_PERIOD_MS;
+  chargeModeStatusPending = 0U;
 }//负责初始化接收过滤器并启动 CAN。
 
 void FDCAN_BatteryCanTask(void)
@@ -1461,17 +1480,17 @@ void FDCAN_BatteryCanTask(void)
   FDCAN_PollBatteryRx(&hfdcan1, 1U);
   FDCAN_PollBatteryRx(&hfdcan3, 2U);
 
-  /* 充电桩通信超时监测：在充电激活状态下，若超过 FDCAN_CHARGER_CAN_TIMEOUT_MS（当前3000ms）未收到充电桩握手帧（拔枪或充电机断电），自动退出充电模式 */
-  now = HAL_GetTick();  /* 在超时判断前刷新 now，消除与 PollBatteryRx 内部更新 charger_can_last_rx_tick 的时序下溢 */
+  /* 充电桩通信超时监测：在充电激活状态(0x01)下，若超过 FDCAN_CHARGER_CAN_TIMEOUT_MS（当前3000ms）未收到充电桩握手帧（0x0500FF80），
+   * 自动关断充电回路切回放电模式，保留 rk_charge_mode_request = 1U 降级回退至等待充电桩握手态(0x02)，待充电桩恢复广播后可自动重入充电 */
+  now = HAL_GetTick();  /* 在超时判断前刷新 now，消除与 PollRkRx 内部更新 charger_can_last_rx_tick 的时序下溢 */
   if (charge_mode_active != 0U)
   {
     uint32_t elapsed = now - charger_can_last_rx_tick;
     if ((charger_can_last_rx_tick != 0U) && (elapsed < 0x80000000U) && (elapsed >= FDCAN_CHARGER_CAN_TIMEOUT_MS))
     {
-      rk_charge_mode_request = 0U;
       charge_mode_active = 0U;
       Power_ExitChargeMode();
-      FDCAN_SendChargeModeStatusToRk(FDCAN_CHARGE_MODE_EXIT);
+      chargeModeStatusPending = 1U;
     }
   }
 
@@ -1533,6 +1552,43 @@ void FDCAN_BatteryCanTask(void)
     {
       busTelemetryReportLastTxTick = now;
       (void)FDCAN_SendBusTelemetryReportToRk();
+    }
+
+    /* ==================== 充电模式状态上报 (0x04500001) ====================
+     * 1. 载荷定义 (DLC=1字节)：
+     *    - 0x00: 未充电 / 已退出充电模式 (FDCAN_CHARGE_MODE_EXIT)
+     *    - 0x01: 已进入充电模式 / 充电中 (FDCAN_CHARGE_MODE_ENTER)
+     *    - 0x02: 已收到充电请求，等待外部充电桩 0x0500FF80 握手 (FDCAN_CHARGE_MODE_WAIT_CHARGER)
+     * 2. 事件必达：收到 0x04500000 指令或充电模式状态跳变时置位 chargeModeStatusPending，
+     *    若遇 FDCAN2 硬件 TX FIFO 满返回 HAL_BUSY（如切入充电时刚连发 3 帧充电机代理报文），
+     *    则保持挂起在下一轮主循环立即重试直至发送成功，彻底根除静默丢帧；
+     * 3. 周期保活：稳态下按 500ms 固定周期广播当前充电模式状态。
+     */
+    {
+      static uint8_t prevChargeModeStatus = 0xFFU;
+      uint8_t curChargeModeStatus = FDCAN_GetChargeModeStatus();
+
+      if (curChargeModeStatus != prevChargeModeStatus)
+      {
+        prevChargeModeStatus = curChargeModeStatus;
+        chargeModeStatusPending = 1U;
+      }
+
+      if (chargeModeStatusPending != 0U)
+      {
+        if (FDCAN_SendChargeModeStatusToRk(curChargeModeStatus) == HAL_OK)
+        {
+          chargeModeReportLastTxTick = now;
+          chargeModeStatusPending = 0U;
+        }
+      }
+      else if ((now - chargeModeReportLastTxTick) >= FDCAN_RK_CHARGE_MODE_REPORT_PERIOD_MS)
+      {
+        if (FDCAN_SendChargeModeStatusToRk(curChargeModeStatus) == HAL_OK)
+        {
+          chargeModeReportLastTxTick = now;
+        }
+      }
     }
 
     /* ==================== 急停状态上报 (0x04300000) ====================

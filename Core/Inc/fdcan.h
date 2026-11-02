@@ -111,9 +111,11 @@ void MX_FDCAN3_Init(void);
 #define FDCAN_CHARGE_MODE_CMD_ID                 0x0500FF80U
 #define FDCAN_RK_CHARGE_MODE_CMD_ID              0x04500000U
 #define FDCAN_RK_CHARGE_MODE_STATUS_ID           0x04500001U
-#define FDCAN_CHARGE_MODE_EXIT                   0x00U
-#define FDCAN_CHARGE_MODE_ENTER                  0x01U
-#define FDCAN_CHARGER_CAN_TIMEOUT_MS             3000U
+#define FDCAN_RK_CHARGE_MODE_REPORT_PERIOD_MS    500U
+#define FDCAN_CHARGER_CAN_TIMEOUT_MS             3000U  /* 充电中(0x01)外部充电桩(0x0500FF80)通信超时阈值(ms) */
+#define FDCAN_CHARGE_MODE_EXIT                   0x00U  /* 未充电 / 已退出充电模式 */
+#define FDCAN_CHARGE_MODE_ENTER                  0x01U  /* 请求进入充电模式 / 已进入充电模式(充电中) */
+#define FDCAN_CHARGE_MODE_WAIT_CHARGER           0x02U  /* 已收到充电请求，等待外部充电桩(0x0500FF80)握手 */
 
 /* 电池总压物理合理性范围校验 (V)：过滤 BMS 通信单包瞬态 0V 或飞帧 */
 #define FDCAN_BATTERY_VOLTAGE_MIN                10.0f
@@ -185,6 +187,7 @@ HAL_StatusTypeDef FDCAN_SendBusTelemetryReportToRk(void);
 HAL_StatusTypeDef FDCAN_SendBatteryAlarmReportToRk(void);
 HAL_StatusTypeDef FDCAN_SendEmergencyStopReportToRk(uint8_t estopActive);
 HAL_StatusTypeDef FDCAN_SendChargeReplyToCharger(uint8_t batteryIndex);
+uint8_t FDCAN_GetChargeModeStatus(void);
 #define FDCAN_SendChargeReplyToCan2 FDCAN_SendChargeReplyToCharger /* 兼容旧命名别名 */
 float FDCAN_GetBatterySoc(uint8_t batteryIndex);
 uint8_t FDCAN_IsBatterySocValid(uint8_t batteryIndex);
